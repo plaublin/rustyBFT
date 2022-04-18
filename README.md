@@ -80,3 +80,26 @@ clients$ cargo run --release --bin client nodes.txt 1 4 10 10 0
 
 ![Testing is doubting](testing.jpg)
 More seriously, there are a few tests that you can run with `cargo test`.
+
+## Evaluation
+
+# Setup
+
+The performance of RustyBFT has been evaluated on 5 identical machine of the c6525-100g cluster at [Cloudlab(https://cloudlab.us)]. The machines have an AMD EPYC Rome 7402P processor @2.80GHz, 128GB of RAM, and run Ubuntu 20.04 and are interconnected via 100Gbps links. In the following evaluation the Linux socket API is used. Unless specified otherwise, one machine executes the clients while each other machine executes one replica. We set the number of tolerated faults to $f = 1$, hence 4 replicas.
+
+RustyBFT is evaluated in the following settings:
+- local replicas, where the replicas are all executed on the same machine;
+- no crypto, where replicas and clients do not check the HMAC nor signature of the messages;
+- HMAC, where replicas do not check client requests signatures;
+- HMAC+Sign, where MAC and signatures are checked.
+
+# Results
+
+The folowing two figures show the latency (in microseconds) as a function of the throughput (in operations per second) in two cases: (1) Empty requests and replies; and (2) 4kB requests and replies.
+
+![4kB requests and replies](latvsthr_4k_4k.jpg)
+![empty requests and replies](latvsthr_0_0.jpg)
+
+First, we can observe that signatures are very costly. We measured that signature verification takes 80% of the cycles at the primary.
+Second, executing the replicas on the same machine reduces the latency by up to 2x while also increasing the maximum throughput by 25%. This shows how decreasing the consensus latency improves the performance.
+
