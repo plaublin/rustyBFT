@@ -6,7 +6,8 @@ Features:
  - UDP; clients and the primary (replica 0) have non-blocking sockets;
  - messages are authenticated with HMAC+SHA256;
  - client requests are signed with ED25519;
- - batching of the requests in the Pre-prepare.
+ - batching of the requests in the Pre-prepare;
+ - no multithreading.
 
 Missing features:
  - checkpointing;
@@ -78,7 +79,7 @@ clients$ cargo run --release --bin client nodes.txt 1 4 10 10 0
 
 ## Testing
 
-![Testing is doubting](testing.jpg)
+<img src="testing.jpg" width="20%" alt="Testing is doubting.">
 
 More seriously, there are a few tests that you can run with `cargo test`.
 
@@ -96,11 +97,11 @@ RustyBFT is evaluated in the following settings:
 
 # Results
 
-The folowing two figures show the latency (in microseconds) as a function of the throughput (in operations per second) in two cases: (1) Empty requests and replies; and (2) 4kB requests and replies.
+The folowing two figures show the latency (in microseconds) as a function of the throughput (in operations per second) in two cases: (1) Empty requests and replies (left); and (2) 4kB requests and replies (right).
 
-![4kB requests and replies](latvsthr_4k_4k.jpg)
-![empty requests and replies](latvsthr_0_0.jpg)
+<img src="latvsthr_0_0.jpg" width="40%" alt="empty requests and replies">&emsp;&emsp;&emsp;<img src="latvsthr_4k_4k.jpg" width="40%" alt="4kB requests and replies">
 
-First, we can observe that signatures are very costly. We measured that signature verification takes 80% of the cycles at the primary.
+First, we can observe that signatures are very costly. We measured that signature verification takes 80% of the cycles at the primary. To reduce this bottleneck it seems important to verify requests in parallel.
+
 Second, executing the replicas on the same machine reduces the latency by up to 2x while also increasing the maximum throughput by 25%. This shows how decreasing the consensus latency improves the performance.
 
