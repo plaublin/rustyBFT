@@ -2,11 +2,11 @@
 // Core functionalities of the SMR
 
 mod communication;
-mod cryptografer;
+pub mod cryptografer;
 mod quorum;
 
 use communication::*;
-use cryptografer::*;
+pub use cryptografer::*;
 use quorum::*;
 use std::collections::BTreeMap;
 use std::fs::File;

@@ -79,6 +79,7 @@ clients$ cargo run --release --bin client nodes.txt 1 4 10 10 0
 ## Testing
 
 ![Testing is doubting](testing.jpg)
+
 More seriously, there are a few tests that you can run with `cargo test`.
 
 ## Evaluation

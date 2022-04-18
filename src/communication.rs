@@ -137,20 +137,24 @@ impl Network {
     pub fn send_raw_message(&self, addr: String, m: &RawMessage) {
         // send the message
         let buf = rmp_serde::to_vec(&m).unwrap();
-        let r = self.socket.send_to(&buf, addr);
-        //println!("send result: {:?}", r);
-
-        match r {
-            Ok(s) => {
-                // If the client couldn't send everything. This is not really an error because the
-                // client will retransmit, but we should investigate, maybe there is a bigger problem
-                // if it happens too frequently
-                if s < buf.len() {
-                    eprintln!("Short send: {} < {}", s, buf.len());
+        loop {
+            let r = self.socket.send_to(&buf, addr.clone());
+            match r {
+                Ok(s) => {
+                    // If the client couldn't send everything. This is not really an error because the
+                    // client will retransmit, but we should investigate, maybe there is a bigger problem
+                    // if it happens too frequently
+                    if s < buf.len() {
+                        eprintln!("Short send: {} < {}", s, buf.len());
+                    }
+                    //println!("send result: {:?}", r);
+                    break;
                 }
-            }
-            Err(e) => panic!("{}", e),
-        };
+                // With many clients and large messages the primary can fail to send with
+                // an Err("Ressource not available"), so don't panic!
+                Err(_e) => (), //panic!("{}", _e),
+            };
+        }
     }
 }
 
