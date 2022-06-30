@@ -27,18 +27,15 @@ fn main() {
         let config = args[1].clone();
         let my_tx = tx.clone();
         let h = thread::spawn(move || {
-            let mut smr = rusty_bft::StateMachine::parse(&config, f, id + i);
-
-            assert!(smr.is_client(), "Invalid client ID");
+            let smr = rusty_bft::statemachine::Client::new(&config, f, id + i);
 
             println!(
                 "Hello, world! I'm client {}: {:?}",
                 smr.id,
-                smr.get_node(smr.id.try_into().unwrap())
+                smr.my_address()
             );
 
             let mut accepted: u64 = 0;
-            let mut failed: u64 = 0;
             let mut sum_lat: u128 = 0;
 
             let start = time::Instant::now();
@@ -47,20 +44,17 @@ fn main() {
                 let req = smr.create_request(reqlen);
 
                 let lat_start = time::Instant::now();
-                smr.send_request(&req);
-                let rep = smr.accept_reply();
+                let _ = smr.invoke(&req);
                 let lat = lat_start.elapsed().as_micros();
 
-                if rep.is_some() {
-                    accepted += 1;
-                    sum_lat += lat;
-                } else {
-                    failed += 1;
+                accepted += 1;
+                sum_lat += lat;
+
+                if accepted % 10000 == 0 {
+                    println!("Client {} accepted {}", smr.id, accepted);
                 }
 
-                if (accepted + failed) % 10000 == 0 {
-                    println!("Client {} accepted {} failed {}", smr.id, accepted, failed);
-                }
+                // std::thread::sleep(time::Duration::from_millis(1000));
             }
 
             let duration = start.elapsed().as_secs_f64();
@@ -71,17 +65,14 @@ fn main() {
                 0
             };
 
-            /*
             println!(
-                "Client {} has finished after {} sec with {} accepted and {} failed, thr = {} ops/s, lat = {} usec",
+                "Client {} has finished after {} sec with {} accepted requests, thr = {} ops/s, lat = {} usec",
                 smr.id,
                 duration,
                 accepted,
-                failed,
                 thr,
                 avg_lat,
             );
-            */
 
             my_tx.send((thr, avg_lat)).unwrap();
         });

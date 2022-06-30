@@ -1,13 +1,13 @@
 use std::env;
 
 fn print_usage(cmd: &str) {
-    eprintln!("Usage: {} config f id replen", cmd);
+    eprintln!("Usage: {} config f id replen #crypto_threads", cmd);
 }
 
 fn main() {
     // read command line
     let args: Vec<String> = env::args().collect();
-    if args.len() < 5 {
+    if args.len() < 6 {
         print_usage(&args[0]);
         return;
     }
@@ -16,15 +16,14 @@ fn main() {
     let f = args[2].parse::<u32>().unwrap();
     let id = args[3].parse::<u32>().unwrap();
     let replen = args[4].parse::<usize>().unwrap();
-    let mut smr = rusty_bft::StateMachine::parse(&args[1], f, id);
-
-    assert!(smr.is_replica(), "Invalid replica ID");
+    let crypto_threads = args[5].parse::<usize>().unwrap();
+    let smr = rusty_bft::statemachine::Replica::new(&args[1], f, id, crypto_threads);
 
     println!(
         "Hello, world! I'm replica {}/{}: {:?}",
         smr.id,
         smr.n,
-        smr.get_node(smr.id.try_into().unwrap())
+        smr.my_address()
     );
 
     smr.run_replica(&|_o: Vec<u8>| -> Vec<u8> {
