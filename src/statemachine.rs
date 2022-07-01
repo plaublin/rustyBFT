@@ -83,7 +83,7 @@ impl Client {
     }
 
     pub fn invoke(&self, req: &RawMessage) -> Rc<RawMessage> {
-        println!("Sending request (len {}) {:?}", req.message_len(), req);
+        //println!("Sending request (len {}) {:?}", req.message_len(), req);
         self.send_request(req);
 
         let mut start = time::Instant::now();
@@ -95,11 +95,11 @@ impl Client {
                 Some(reply) => {
                     let rep = reply.message::<Reply>();
                     q.add(rep.r, reply);
-                    println!("Quorum is now {:?}", q);
+                    //println!("Quorum is now {:?}", q);
                 }
                 None => {
                     if start.elapsed() >= CLIENT_TIMEOUT_MS {
-                        println!("Retransmit request...");
+                        //println!("Retransmit request...");
                         self.send_request(req);
                         start = time::Instant::now();
                     }
@@ -166,11 +166,11 @@ fn create_network_thread(
 ) {
     let _ = thread::spawn(move || {
         println!("Starting the network thread");
-        let network = UDPNetwork::new(id, false /*TODO true*/, &nodes);
+        let network = UDPNetwork::new(id, true, &nodes);
 
         loop {
             while let Ok((i, m)) = crypto_to_net.try_recv() {
-                println!("net sends {:?} to {}", m, i);
+                //println!("net sends {:?} to {}", m, i);
                 network.send(i, &m);
             }
 
@@ -224,9 +224,9 @@ fn create_crypto_threads(
                         // deserialize the batch to check requests signature
                         let payload = m.message_payload_mut::<PrePrepare>().unwrap();
                         let mut offset = 0;
-                        println!("I have received a PP with payload {:?}", payload);
+                        //println!("I have received a PP with payload {:?}", payload);
                         while offset < payload.len() {
-                            println!("offset = {}, payload.len() = {}", offset, payload.len());
+                            //println!("offset = {}, payload.len() = {}", offset, payload.len());
                             let len = unsafe {
                                 let header =
                                     &*(payload.as_ptr() as *const MessageHeader) as &MessageHeader;
@@ -347,7 +347,7 @@ impl Replica {
     fn handle_request(&self, request: RawMessage) {
         assert!(request.message_type() == MessageType::Request);
 
-        println!("Replica {} has received request {:?}", self.id, request);
+        //println!("Replica {} has received request {:?}", self.id, request);
 
         // The client will retransmit to all and find the correct primary
         if !self.is_primary() {
@@ -387,7 +387,7 @@ impl Replica {
             }
         }
 
-        println!("Creating PP of size {}", current_batch_size);
+        //println!("Creating PP of size {}", current_batch_size);
 
         let mut pp = RawMessage::new_preprepare(
             self.v,
@@ -407,16 +407,18 @@ impl Replica {
                 std::ptr::copy(src, dst, len);
             }
 
-            println!("reqlen = {}, offset now {}, req = {:?}", len, offset, req);
+            //println!("reqlen = {}, offset now {}, req = {:?}", len, offset, req);
             offset += len;
         }
 
+        /*
         println!(
             "{} has created PP with {} requests: {:?}",
             self.id,
             batch.len(),
             pp
         );
+        */
 
         self.send_message_to_all_replicas(&pp);
 
@@ -435,16 +437,18 @@ impl Replica {
         // move to next sequence number
         self.next_pp_seqnum.set(self.next_pp_seqnum.get() + 1);
 
+        /*
         println!(
             "Replica {} moves to next seqnum {}",
             self.id,
             self.next_pp_seqnum.get()
         );
+        */
     }
 
     fn handle_preprepare(&self, m: RawMessage) {
         let pp = m.message::<PrePrepare>();
-        println!("Replica {} has received a PP {:?}", self.id, pp);
+        //println!("Replica {} has received a PP {:?}", self.id, pp);
 
         if self.is_primary() {
             return;
@@ -465,15 +469,15 @@ impl Replica {
         let mut batch = Vec::<RawMessage>::new();
         let payload = m.message_payload::<PrePrepare>().unwrap();
         let mut offset = 0;
-        println!("The batch is as follows (payload == {:?})", payload);
+        //println!("The batch is as follows (payload == {:?})", payload);
         while offset < payload.len() {
-            println!("offset = {}, payload.len() = {}", offset, payload.len());
+            //println!("offset = {}, payload.len() = {}", offset, payload.len());
             let len = unsafe {
                 let header = &*(payload.as_ptr() as *const MessageHeader) as &MessageHeader;
                 std::mem::size_of::<MessageHeader>() + header.len
             };
 
-            println!("Create a new batch request of size {}", len);
+            //println!("Create a new batch request of size {}", len);
             let mut batch_request = RawMessage::new(len);
             unsafe {
                 let src = payload.as_ptr().add(offset);
@@ -547,7 +551,7 @@ impl Replica {
     fn handle_prepare(&self, m: RawMessage) {
         let p = m.message::<Prepare>();
 
-        println!("Replica {} has received a P {:?}", self.id, p);
+        //println!("Replica {} has received a P {:?}", self.id, p);
 
         let prepare_seq_num = p.seqnum;
         if prepare_seq_num < self.seqnum.get() {
@@ -638,15 +642,17 @@ impl Replica {
     fn handle_commit(&self, m: RawMessage) {
         let c = m.message::<Commit>();
 
-        println!("Replica {} has received a C {:?}", self.id, c);
+        //println!("Replica {} has received a C {:?}", self.id, c);
 
         if c.seqnum < self.seqnum.get() {
+            /*
             println!(
                 "Replica {} has received a C from the past: {} < {}",
                 self.id,
                 c.seqnum,
                 self.seqnum.get()
             );
+            */
             return;
         }
 
@@ -678,10 +684,10 @@ impl Replica {
         f: &dyn Fn(Vec<u8>) -> Vec<u8>,
         request: &RawMessage,
     ) -> RawMessage {
-        println!(
-            "Single-mode: Replica {} has received request {:?}",
-            self.id, request
-        );
+        //println!(
+        //    "Single-mode: Replica {} has received request {:?}",
+        //    self.id, request
+        //);
 
         let payload = f(request
             .message_payload::<Request>()
@@ -724,6 +730,7 @@ impl Replica {
                 && consensus.p.is_complete()
                 && consensus.c.is_complete()
             {
+                /*
                 println!(
                     "Replica {} executes request for consensus {}; last exec is {}",
                     self.id,
@@ -736,6 +743,7 @@ impl Replica {
                     consensus.batch.len(),
                     consensus_num
                 );
+                */
 
                 for request in consensus.batch.iter() {
                     let reply = self.execute_single_request(f, request);
