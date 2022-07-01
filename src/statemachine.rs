@@ -169,9 +169,11 @@ fn create_network_thread(
         let network = UDPNetwork::new(id, true, &nodes);
 
         loop {
-            while let Ok((i, m)) = crypto_to_net.try_recv() {
-                //println!("net sends {:?} to {}", m, i);
-                network.send(i, &m);
+            while !crypto_to_net.is_empty() {
+                if let Ok((i, m)) = crypto_to_net.recv() {
+                    //println!("net sends {:?} to {}", m, i);
+                    network.send(i, &m);
+                }
             }
 
             if let Ok(m) = network.receive() {
@@ -191,19 +193,16 @@ fn create_crypto_threads(
     crypto_to_net: Sender<(u32, RawMessage)>,
     net_to_crypto: Receiver<RawMessage>,
 ) {
-    for t in 0..nthreads {
+    let middle = nthreads / 2;
+
+    for t in 0..middle {
         let n = nodes.clone();
         let s2c = smr_to_crypto.clone();
-        let c2s = crypto_to_smr.clone();
         let c2n = crypto_to_net.clone();
-        let n2c = net_to_crypto.clone();
 
         let _ = thread::spawn(move || {
-            println!("Starting crypto thread {}/{}", t, nthreads);
+            println!("Starting smr to network crypto thread {}/{}", t, nthreads);
             let crypto = CryptoLayer::new(id, &n);
-
-            // let's reuse the same for every batched request
-            let mut batch_request = RawMessage::default();
 
             loop {
                 // receive from smr, authenticate, and send to net
@@ -213,7 +212,23 @@ fn create_crypto_threads(
                     //println!("{} sends {:?} to net for {}", t, m, i);
                     c2n.send((i, m)).unwrap();
                 }
+            }
+        });
+    }
 
+    for t in middle..nthreads {
+        let n = nodes.clone();
+        let c2s = crypto_to_smr.clone();
+        let n2c = net_to_crypto.clone();
+
+        let _ = thread::spawn(move || {
+            println!("Starting network to smr crypto thread {}/{}", t, nthreads);
+            let crypto = CryptoLayer::new(id, &n);
+
+            // let's reuse the same for every batched request
+            let mut batch_request = RawMessage::default();
+
+            loop {
                 // receive from net, authenticate, and send to smr
                 if let Ok(mut m) = n2c.try_recv() {
                     //println!("{} will verify {:?}", t, m);
@@ -258,7 +273,10 @@ impl Replica {
     pub fn new(config: &str, f: u32, id: u32, crypto_threads: usize) -> Self {
         let n = 3 * f + 1;
         assert!(id < n, "Invalid replica ID {} < {}", id, n);
-        assert!(crypto_threads > 0, "Need at least one crypto thread");
+        assert!(
+            crypto_threads > 0 && crypto_threads % 2 == 0,
+            "Need an even number of crypto threads (at least 2)"
+        );
 
         let nodes = parse_configuration_file(config);
 
@@ -309,17 +327,18 @@ impl Replica {
 
     pub fn run_replica(&self, f: &dyn Fn(Vec<u8>) -> Vec<u8>) -> ! {
         loop {
-            let m = self.crypto_to_smr_receiver.recv().unwrap();
-            //println!("\nReceived correctly authenticated message {:?}", m);
-            match m.message_type() {
-                MessageType::Request => self.handle_request(m),
-                MessageType::PrePrepare => self.handle_preprepare(m),
-                MessageType::Prepare => self.handle_prepare(m),
-                MessageType::Commit => self.handle_commit(m),
-                t => eprintln!(
-                    "Replica {} has received message of unknown type {:?}",
-                    self.id, t
-                ),
+            if let Ok(m) = self.crypto_to_smr_receiver.try_recv() {
+                //println!("\nReceived correctly authenticated message {:?}", m);
+                match m.message_type() {
+                    MessageType::Request => self.handle_request(m),
+                    MessageType::PrePrepare => self.handle_preprepare(m),
+                    MessageType::Prepare => self.handle_prepare(m),
+                    MessageType::Commit => self.handle_commit(m),
+                    t => eprintln!(
+                        "Replica {} has received message of unknown type {:?}",
+                        self.id, t
+                    ),
+                }
             }
 
             self.execute_requests_and_reply(f);
