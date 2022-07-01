@@ -514,7 +514,7 @@ impl Replica {
         // create consensus and updathashmap
         // maybe we already received a P and already have a consensus
         let mut borrowed_consensus = self.consensus.borrow_mut();
-        let mut bool need_to_handle_prepare = false;
+        let mut need_to_handle_prepare = false;
         if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
             //FIXME ideally we would need to check that the existing consensus is compatible with
             //this pre-prepare
@@ -537,7 +537,7 @@ impl Replica {
             */
 
             let mut pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
-            pq.add(self.id, p);
+            pq.add(self.id, p.clone());
             let consensus = Consensus {
                 batch,
                 pp: Some(m),
