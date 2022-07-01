@@ -327,17 +327,19 @@ impl Replica {
 
     pub fn run_replica(&self, f: &dyn Fn(Vec<u8>) -> Vec<u8>) -> ! {
         loop {
-            if let Ok(m) = self.crypto_to_smr_receiver.try_recv() {
-                //println!("\nReceived correctly authenticated message {:?}", m);
-                match m.message_type() {
-                    MessageType::Request => self.handle_request(m),
-                    MessageType::PrePrepare => self.handle_preprepare(m),
-                    MessageType::Prepare => self.handle_prepare(m),
-                    MessageType::Commit => self.handle_commit(m),
-                    t => eprintln!(
-                        "Replica {} has received message of unknown type {:?}",
-                        self.id, t
-                    ),
+            while !self.crypto_to_smr_receiver.is_empty() {
+                if let Ok(m) = self.crypto_to_smr_receiver.recv() {
+                    //println!("\nReceived correctly authenticated message {:?}", m);
+                    match m.message_type() {
+                        MessageType::Request => self.handle_request(m),
+                        MessageType::PrePrepare => self.handle_preprepare(m),
+                        MessageType::Prepare => self.handle_prepare(m),
+                        MessageType::Commit => self.handle_commit(m),
+                        t => eprintln!(
+                            "Replica {} has received message of unknown type {:?}",
+                            self.id, t
+                        ),
+                    }
                 }
             }
 
