@@ -143,6 +143,14 @@ impl Consensus {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Statistics {
+    min_batch_size: u64,
+    max_batch_size: u64,
+    total_batch_size: u64,
+    nbatches: u64,
+}
+
 pub struct Replica {
     pub n: u32,
     pub f: u32,
@@ -158,6 +166,7 @@ pub struct Replica {
     batch_crypto_to_smr_receiver: Receiver<RawMessage>,
     consensus: RefCell<BTreeMap<u64, Consensus>>, // the current consensus
     pending_req: RefCell<VecDeque<RawMessage>>,   // for batching
+    stats: Cell<Statistics>,
 }
 
 fn create_network_thread(
@@ -259,10 +268,7 @@ impl Replica {
     pub fn new(config: &str, f: u32, id: u32, crypto_threads: usize) -> Self {
         let n = 3 * f + 1;
         assert!(id < n, "Invalid replica ID {} < {}", id, n);
-        assert!(
-            crypto_threads > 0 && crypto_threads % 2 == 0,
-            "Need an even number of crypto threads (at least 2)"
-        );
+        assert!(crypto_threads > 0, "Need at least 1 crypto thread");
 
         let nodes = parse_configuration_file(config);
 
@@ -294,6 +300,13 @@ impl Replica {
             batch_crypto_to_smr_sender,
         );
 
+        let stats = Statistics {
+            min_batch_size: u64::MAX,
+            max_batch_size: 0,
+            total_batch_size: 0,
+            nbatches: 0,
+        };
+
         Self {
             n,
             f,
@@ -309,6 +322,7 @@ impl Replica {
             batch_crypto_to_smr_receiver,
             consensus: RefCell::new(BTreeMap::new()),
             pending_req: RefCell::new(VecDeque::new()),
+            stats: Cell::new(stats),
         }
     }
 
@@ -398,17 +412,23 @@ impl Replica {
         let max_batch_size = PrePrepare::max_payload_max();
         let mut current_batch_size = 0;
         let mut n_reqs = 0;
+
+        /*
         println!(
             "{} pending req, max_batch_size = {}",
             self.pending_req.borrow().len(),
             max_batch_size
         );
+        */
+
         while current_batch_size < max_batch_size && !self.pending_req.borrow().is_empty() {
             let sz = self.pending_req.borrow()[0].message_len();
+            /*
             println!(
                 "batch has {} reqs, current request of size {}, current_batch_size = {}",
                 n_reqs, sz, current_batch_size
             );
+            */
             if current_batch_size + sz > max_batch_size {
                 break;
             } else {
@@ -418,10 +438,37 @@ impl Replica {
             }
         }
 
+        /*
         println!(
             "Creating PP of size {} and {} reqs",
             current_batch_size, n_reqs
         );
+        */
+
+        let mut stats = self.stats.get();
+        stats.min_batch_size = if n_reqs < stats.min_batch_size {
+            n_reqs
+        } else {
+            stats.min_batch_size
+        };
+        stats.max_batch_size = if n_reqs > stats.max_batch_size {
+            n_reqs
+        } else {
+            stats.max_batch_size
+        };
+        stats.total_batch_size += n_reqs;
+        stats.nbatches += 1;
+        self.stats.set(stats);
+
+        if stats.nbatches % 10000 == 0 {
+            println!(
+                "Stats: {} PP, batch size (min, max, avg) == {}, {}, {}",
+                stats.nbatches,
+                stats.min_batch_size,
+                stats.max_batch_size,
+                (stats.total_batch_size as f64) / (stats.nbatches as f64)
+            );
+        }
 
         let mut pp = RawMessage::new_preprepare(
             self.v,
