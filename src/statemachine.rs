@@ -154,6 +154,8 @@ pub struct Replica {
     nodes: Vec<Node>,
     smr_to_crypto_sender: Sender<(u32, RawMessage)>,
     crypto_to_smr_receiver: Receiver<RawMessage>,
+    batch_smr_to_crypto_sender: Sender<RawMessage>,
+    batch_crypto_to_smr_receiver: Receiver<RawMessage>,
     consensus: RefCell<BTreeMap<u64, Consensus>>, // the current consensus
     pending_req: RefCell<VecDeque<RawMessage>>,   // for batching
 }
@@ -192,13 +194,19 @@ fn create_crypto_threads(
     crypto_to_smr: Sender<RawMessage>,
     crypto_to_net: Sender<(u32, RawMessage)>,
     net_to_crypto: Receiver<RawMessage>,
+    batch_smr_to_crypto: Receiver<RawMessage>,
+    batch_crypto_to_smr: Sender<RawMessage>,
 ) {
-    let middle = nthreads / 2;
-
-    for t in 0..middle {
+    for t in 0..nthreads {
         let n = nodes.clone();
         let s2c = smr_to_crypto.clone();
+        let c2s = crypto_to_smr.clone();
         let c2n = crypto_to_net.clone();
+        let n2c = net_to_crypto.clone();
+
+        // use to verify the batch of requests in the PP in parallel
+        let batch_s2c = batch_smr_to_crypto.clone();
+        let batch_c2s = batch_crypto_to_smr.clone();
 
         let _ = thread::spawn(move || {
             println!("Starting smr to network crypto thread {}/{}", t, nthreads);
@@ -212,56 +220,34 @@ fn create_crypto_threads(
                     //println!("{} sends {:?} to net for {}", t, m, i);
                     c2n.send((i, m)).unwrap();
                 }
-            }
-        });
-    }
 
-    for t in middle..nthreads {
-        let n = nodes.clone();
-        let c2s = crypto_to_smr.clone();
-        let n2c = net_to_crypto.clone();
-
-        let _ = thread::spawn(move || {
-            println!("Starting network to smr crypto thread {}/{}", t, nthreads);
-            let crypto = CryptoLayer::new(id, &n);
-
-            // let's reuse the same for every batched request
-            let mut batch_request = RawMessage::default();
-
-            loop {
                 // receive from net, authenticate, and send to smr
                 if let Ok(mut m) = n2c.try_recv() {
                     //println!("{} will verify {:?}", t, m);
                     let mut valid = crypto.message_authentication_is_valid(&mut m);
                     if valid && m.message_type() == MessageType::Request {
                         valid = crypto.request_signature_is_valid(&mut m)
-                    } else if valid && m.message_type() == MessageType::PrePrepare {
-                        // deserialize the batch to check requests signature
-                        let payload = m.message_payload_mut::<PrePrepare>().unwrap();
-                        let mut offset = 0;
-                        //println!("I have received a PP with payload {:?}", payload);
-                        while offset < payload.len() {
-                            //println!("offset = {}, payload.len() = {}", offset, payload.len());
-                            let len = unsafe {
-                                let header =
-                                    &*(payload.as_ptr() as *const MessageHeader) as &MessageHeader;
-                                std::mem::size_of::<MessageHeader>() + header.len
-                            };
-
-                            unsafe {
-                                let src = payload.as_ptr().add(offset);
-                                let dst = batch_request.inner.as_mut_ptr() as *mut u8;
-                                std::ptr::copy(src, dst, len);
-                            }
-
-                            valid &= crypto.request_signature_is_valid(&mut batch_request);
-                            offset += len;
-                        }
                     }
 
                     if valid {
                         //println!("{} sends {:?} to smr", t, m);
                         c2s.send(m).unwrap();
+                    }
+                }
+
+                // receive a batch of requests to verify from smr
+                // verify, and if valid send back to smr; otherwise send empty raw message
+                if let Ok(mut m) = batch_s2c.try_recv() {
+                    //println!("{} will verify {:?}", t, m);
+                    let mut valid = crypto.message_authentication_is_valid(&mut m);
+                    if valid && m.message_type() == MessageType::Request {
+                        valid = crypto.request_signature_is_valid(&mut m)
+                    }
+                    //batch_c2s.send((valid, m)).unwrap();
+
+                    if valid {
+                        let m = RawMessage::new(0);
+                        batch_c2s.send(m).unwrap();
                     }
                 }
             }
@@ -285,6 +271,11 @@ impl Replica {
         let (crypto_to_net_sender, crypto_to_net_receiver) = crossbeam_channel::unbounded();
         let (net_to_crypto_sender, net_to_crypto_receiver) = crossbeam_channel::unbounded();
 
+        let (batch_smr_to_crypto_sender, batch_smr_to_crypto_receiver) =
+            crossbeam_channel::unbounded();
+        let (batch_crypto_to_smr_sender, batch_crypto_to_smr_receiver) =
+            crossbeam_channel::unbounded();
+
         create_network_thread(
             id,
             nodes.clone(),
@@ -299,6 +290,8 @@ impl Replica {
             crypto_to_smr_sender,
             crypto_to_net_sender,
             net_to_crypto_receiver,
+            batch_smr_to_crypto_receiver,
+            batch_crypto_to_smr_sender,
         );
 
         Self {
@@ -312,6 +305,8 @@ impl Replica {
             nodes,
             smr_to_crypto_sender,
             crypto_to_smr_receiver,
+            batch_smr_to_crypto_sender,
+            batch_crypto_to_smr_receiver,
             consensus: RefCell::new(BTreeMap::new()),
             pending_req: RefCell::new(VecDeque::new()),
         }
@@ -385,6 +380,10 @@ impl Replica {
             return;
         }
 
+        if self.pending_req.borrow().len() < 2 {
+            return;
+        }
+
         // if too many consensus in progress then forget about creating a new one for now
         if self.consensus.borrow().len() > MAX_PENDING_CONSENSUS {
             return;
@@ -398,17 +397,31 @@ impl Replica {
         let mut batch = Vec::new();
         let max_batch_size = PrePrepare::max_payload_max();
         let mut current_batch_size = 0;
+        let mut n_reqs = 0;
+        println!(
+            "{} pending req, max_batch_size = {}",
+            self.pending_req.borrow().len(),
+            max_batch_size
+        );
         while current_batch_size < max_batch_size && !self.pending_req.borrow().is_empty() {
             let sz = self.pending_req.borrow()[0].message_len();
+            println!(
+                "batch has {} reqs, current request of size {}, current_batch_size = {}",
+                n_reqs, sz, current_batch_size
+            );
             if current_batch_size + sz > max_batch_size {
                 break;
             } else {
                 batch.push(self.pending_req.borrow_mut().pop_front().unwrap());
                 current_batch_size += sz;
+                n_reqs += 1;
             }
         }
 
-        //println!("Creating PP of size {}", current_batch_size);
+        println!(
+            "Creating PP of size {} and {} reqs",
+            current_batch_size, n_reqs
+        );
 
         let mut pp = RawMessage::new_preprepare(
             self.v,
@@ -487,9 +500,9 @@ impl Replica {
         }
 
         // deserialize the batch
-        let mut batch = Vec::<RawMessage>::new();
         let payload = m.message_payload::<PrePrepare>().unwrap();
         let mut offset = 0;
+        let mut nreqs = 0;
         //println!("The batch is as follows (payload == {:?})", payload);
         while offset < payload.len() {
             //println!("offset = {}, payload.len() = {}", offset, payload.len());
@@ -505,8 +518,19 @@ impl Replica {
                 let dst = batch_request.inner.as_mut_ptr() as *mut u8;
                 std::ptr::copy(src, dst, len);
             }
-            batch.push(batch_request);
+
+            self.batch_smr_to_crypto_sender.send(batch_request).unwrap();
             offset += len;
+            nreqs += 1;
+        }
+
+        let mut batch = Vec::<RawMessage>::new();
+        while nreqs > 0 {
+            let batch_request = self.batch_crypto_to_smr_receiver.recv().unwrap();
+            if !batch_request.inner.is_empty() {
+                batch.push(batch_request);
+            }
+            nreqs -= 1;
         }
 
         // create request digest, or keep the original request if small enough
