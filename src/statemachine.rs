@@ -513,39 +513,41 @@ impl Replica {
 
         // create consensus and updathashmap
         // maybe we already received a P and already have a consensus
-        let mut borrowed_consensus = self.consensus.borrow_mut();
         let mut need_to_handle_prepare = false;
-        if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
-            //FIXME ideally we would need to check that the existing consensus is compatible with
-            //this pre-prepare
-            /*
-            println!(
-                "I already have a consensus for {}; adding the P {:?}",
-                pp_seq_num, p
-            );
-            */
-            consensus.batch = batch;
-            consensus.pp = Some(m);
-            // consensus.p.add(self.id, p); // done by the call below
-            need_to_handle_prepare = true;
-        } else {
-            /*
-            println!(
-                "Create a new consensus for {}; adding the P {:?}",
-                pp_seq_num, p
-            );
-            */
+        {
+            let mut borrowed_consensus = self.consensus.borrow_mut();
+            if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
+                //FIXME ideally we would need to check that the existing consensus is compatible with
+                //this pre-prepare
+                /*
+                println!(
+                    "I already have a consensus for {}; adding the P {:?}",
+                    pp_seq_num, p
+                );
+                */
+                consensus.batch = batch;
+                consensus.pp = Some(m);
+                // consensus.p.add(self.id, p); // done by the call below
+                need_to_handle_prepare = true;
+            } else {
+                /*
+                println!(
+                    "Create a new consensus for {}; adding the P {:?}",
+                    pp_seq_num, p
+                );
+                */
 
-            let mut pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
-            pq.add(self.id, p.clone());
-            let consensus = Consensus {
-                batch,
-                pp: Some(m),
-                p: pq,
-                c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
-                rep: None,
-            };
-            borrowed_consensus.insert(pp_seq_num, consensus);
+                let mut pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
+                pq.add(self.id, p.clone());
+                let consensus = Consensus {
+                    batch,
+                    pp: Some(m),
+                    p: pq,
+                    c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
+                    rep: None,
+                };
+                borrowed_consensus.insert(pp_seq_num, consensus);
+            }
         }
 
         // need to be here so we don't call it while the consensus is borrowed as mutable
