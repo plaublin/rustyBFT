@@ -514,6 +514,7 @@ impl Replica {
         // create consensus and updathashmap
         // maybe we already received a P and already have a consensus
         let mut borrowed_consensus = self.consensus.borrow_mut();
+        let mut bool need_to_handle_prepare = false;
         if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
             //FIXME ideally we would need to check that the existing consensus is compatible with
             //this pre-prepare
@@ -526,7 +527,7 @@ impl Replica {
             consensus.batch = batch;
             consensus.pp = Some(m);
             // consensus.p.add(self.id, p); // done by the call below
-            self.handle_prepare(p);
+            need_to_handle_prepare = true;
         } else {
             /*
             println!(
@@ -545,6 +546,11 @@ impl Replica {
                 rep: None,
             };
             borrowed_consensus.insert(pp_seq_num, consensus);
+        }
+
+        // need to be here so we don't call it while the consensus is borrowed as mutable
+        if need_to_handle_prepare {
+            self.handle_prepare(p);
         }
     }
 
