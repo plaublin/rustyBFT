@@ -519,12 +519,10 @@ impl Replica {
     }
 
     fn handle_preprepare(&self, m: RawMessage) {
-        let pp = m.message::<PrePrepare>();
-        println!("Replica {} has received a PP {:?}", self.id, pp);
+        assert!(!self.is_primary());
 
-        if self.is_primary() {
-            return;
-        }
+        let pp = m.message::<PrePrepare>();
+        //println!("Replica {} has received a PP {:?}", self.id, pp);
 
         let pp_seq_num = pp.seqnum;
         if pp_seq_num < self.seqnum.get() {
