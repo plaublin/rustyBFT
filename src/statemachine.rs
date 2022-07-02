@@ -247,17 +247,12 @@ fn create_crypto_threads(
                 // receive a batch of requests to verify from smr
                 // verify, and if valid send back to smr; otherwise send empty raw message
                 if let Ok(mut m) = batch_s2c.try_recv() {
-                    //println!("{} will verify {:?}", t, m);
-                    let mut valid = crypto.message_authentication_is_valid(&mut m);
-                    if valid && m.message_type() == MessageType::Request {
-                        valid = crypto.request_signature_is_valid(&mut m)
+                    // we do not check the MAC because it's for the primary, not us another replica
+                    assert!(m.message_type() == MessageType::Request);
+                    if !crypto.request_signature_is_valid(&mut m) {
+                        m = RawMessage::new(0);
                     }
-                    //batch_c2s.send((valid, m)).unwrap();
-
-                    if valid {
-                        let m = RawMessage::new(0);
-                        batch_c2s.send(m).unwrap();
-                    }
+                    batch_c2s.send(m).unwrap();
                 }
             }
         });
@@ -394,10 +389,6 @@ impl Replica {
             return;
         }
 
-        if self.pending_req.borrow().len() < 2 {
-            return;
-        }
-
         // if too many consensus in progress then forget about creating a new one for now
         if self.consensus.borrow().len() > MAX_PENDING_CONSENSUS {
             return;
@@ -529,7 +520,7 @@ impl Replica {
 
     fn handle_preprepare(&self, m: RawMessage) {
         let pp = m.message::<PrePrepare>();
-        //println!("Replica {} has received a PP {:?}", self.id, pp);
+        println!("Replica {} has received a PP {:?}", self.id, pp);
 
         if self.is_primary() {
             return;
@@ -566,6 +557,7 @@ impl Replica {
                 std::ptr::copy(src, dst, len);
             }
 
+            //println!("Send request {:?} to crypto threads", batch_request);
             self.batch_smr_to_crypto_sender.send(batch_request).unwrap();
             offset += len;
             nreqs += 1;
@@ -574,6 +566,7 @@ impl Replica {
         let mut batch = Vec::<RawMessage>::new();
         while nreqs > 0 {
             let batch_request = self.batch_crypto_to_smr_receiver.recv().unwrap();
+            //println!("Received request {:?} from crypto threads", batch_request);
             if !batch_request.inner.is_empty() {
                 batch.push(batch_request);
             }
@@ -832,16 +825,11 @@ impl Replica {
             {
                 /*
                 println!(
-                    "Replica {} executes request for consensus {}; last exec is {}",
-                    self.id,
-                    consensus_num,
-                    self.seqnum.get()
-                );
-                println!(
-                    "Replica {} executes {} requests in consensus {}",
+                    "Replica {} executes {} requests for consensus {}; last exec is {}",
                     self.id,
                     consensus.batch.len(),
-                    consensus_num
+                    consensus_num,
+                    self.seqnum.get()
                 );
                 */
 
