@@ -26,7 +26,7 @@ pub struct Client {
 
 impl Client {
     pub fn new(config: &str, f: u32, id: u32) -> Self {
-        let n = 3 * f + 1;
+        let n = if HYBRID_MODE { 2 * f + 1 } else { 3 * f + 1 };
         assert!(id >= n, "Invalid client id {} >= {}", id, n);
 
         let nodes = parse_configuration_file(config);
@@ -261,7 +261,7 @@ fn create_crypto_threads(
 
 impl Replica {
     pub fn new(config: &str, f: u32, id: u32, crypto_threads: usize) -> Self {
-        let n = 3 * f + 1;
+        let n = if HYBRID_MODE { 2 * f + 1 } else { 3 * f + 1 };
         assert!(id < n, "Invalid replica ID {} < {}", id, n);
         assert!(crypto_threads > 0, "Need at least 1 crypto thread");
 
@@ -696,20 +696,14 @@ impl Replica {
                             .seqnum
                             == prepare_seq_num)
                 {
-                    if consensus.p.is_complete() {
-                        // We have already sent a commit
-                        return;
-                    }
-
                     consensus.p.add(p.r, m);
-                    consensus_prepare_is_complete = consensus.p.is_complete();
+
                     /*
-                    if !consensus_prepare_is_complete {
-                        println!(
-                            "Replica {}, P consensus not complete yet: {:?}",
-                            self.id, consensus.p
-                        );
-                    }
+                    consensus_prepare_is_complete = consensus.p.is_complete();
+                    println!(
+                        "Consensus add P {:?}, complete? {}",
+                        m, consensus_prepare_is_complete
+                    );
                     */
                 } else {
                     println!(
@@ -755,8 +749,8 @@ impl Replica {
             let consensus = Consensus {
                 batch: vec![],
                 pp: None,
-                p: Quorum::new(self.n as usize, 2 * self.f as usize),
-                c: Quorum::new(self.n as usize, (2 * self.f + 1) as usize),
+                p: Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f)),
+                c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
                 rep: None,
             };
             self.consensus.borrow_mut().insert(c.seqnum, consensus);
@@ -768,6 +762,20 @@ impl Replica {
             .unwrap()
             .c
             .add(c.r, m.clone());
+
+        /*
+        let consensus_commit_is_complete = self
+            .consensus
+            .borrow()
+            .get(&c.seqnum)
+            .unwrap()
+            .c
+            .is_complete();
+        println!(
+            "Consensus add C {:?}, complete? {}",
+            m, consensus_commit_is_complete
+        );
+        */
     }
 
     fn execute_single_request(
