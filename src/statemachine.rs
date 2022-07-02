@@ -697,9 +697,9 @@ impl Replica {
                             == prepare_seq_num)
                 {
                     consensus.p.add(p.r, m);
+                    consensus_prepare_is_complete = consensus.p.is_complete();
 
                     /*
-                    consensus_prepare_is_complete = consensus.p.is_complete();
                     println!(
                         "Consensus add P {:?}, complete? {}",
                         m, consensus_prepare_is_complete
