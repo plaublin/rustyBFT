@@ -17,6 +17,18 @@ pub const MAX_PENDING_CONSENSUS: usize = 1;
 /// True if run in hybrid mode, i.e., n = 2f+1 instead of n = 3f+1
 pub const HYBRID_MODE: bool = false;
 
+/// True => will print the messages received and sent
+pub const DEBUG_PRINT_MESSAGES: bool = false;
+
+#[macro_export]
+macro_rules! dbg_println {
+    ($($arg:tt)*) => {{
+        if self::DEBUG_PRINT_MESSAGES {
+        println!($($arg)*);
+        }
+    }};
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: u32,

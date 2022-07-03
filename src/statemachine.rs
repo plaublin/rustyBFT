@@ -1,5 +1,6 @@
 use crate::configuration::*;
 use crate::crypto::CryptoLayer;
+use crate::dbg_println;
 use crate::message::*;
 use crate::network::NetworkLayer;
 use crate::quorum::Quorum;
@@ -83,7 +84,11 @@ impl Client {
     }
 
     pub fn invoke(&self, req: &RawMessage) -> Rc<RawMessage> {
-        //println!("Sending request (len {}) {:?}", req.message_len(), req);
+        dbg_println!(
+            "Sending request (len {}) {:?}",
+            req.message_len(),
+            req.message::<Request>()
+        );
         self.send_request(req);
 
         let mut start = time::Instant::now();
@@ -94,6 +99,7 @@ impl Client {
             match ret {
                 Some(reply) => {
                     let rep = reply.message::<Reply>();
+                    dbg_println!("Received reply {:?}", rep);
                     q.add(rep.r, reply);
                     //println!("Quorum is now {:?}", q);
                 }
@@ -357,11 +363,50 @@ impl Replica {
 
     fn send_message(&self, i: u32, m: RawMessage) {
         assert!(m.message_type() != MessageType::Request);
+
+        if m.message_type() == MessageType::Reply {
+            dbg_println!(
+                "Replica {} is sending to client {}: {:?}",
+                self.id,
+                i,
+                m.message::<Reply>()
+            );
+        }
+
         self.smr_to_crypto_sender.send((i, m)).unwrap();
     }
 
     fn send_message_to_all_replicas(&self, m: &RawMessage) {
         assert!(m.message_type() != MessageType::Request);
+
+        match m.message_type() {
+            MessageType::PrePrepare => {
+                dbg_println!(
+                    "Replica {} is sending to all: {:?}",
+                    self.id,
+                    m.message::<PrePrepare>()
+                );
+            }
+
+            MessageType::Prepare => {
+                dbg_println!(
+                    "Replica {} is sending to all: {:?}",
+                    self.id,
+                    m.message::<Prepare>()
+                );
+            }
+            MessageType::Commit => {
+                dbg_println!(
+                    "Replica {} is sending to all: {:?}",
+                    self.id,
+                    m.message::<Commit>(),
+                );
+            }
+            _ => {
+                dbg_println!("Replica {} is sending to all: {:?}", self.id, m,);
+            }
+        }
+
         for i in 0..self.n {
             if i != self.id {
                 self.smr_to_crypto_sender.send((i, m.clone())).unwrap();
@@ -372,7 +417,8 @@ impl Replica {
     fn handle_request(&self, request: RawMessage) {
         assert!(request.message_type() == MessageType::Request);
 
-        //println!("Replica {} has received request {:?}", self.id, request);
+        let r = request.message::<Request>();
+        dbg_println!("Replica {} has received request {:?}", self.id, r);
 
         // The client will retransmit to all and find the correct primary
         if !self.is_primary() {
@@ -522,7 +568,7 @@ impl Replica {
         assert!(!self.is_primary());
 
         let pp = m.message::<PrePrepare>();
-        //println!("Replica {} has received a PP {:?}", self.id, pp);
+        dbg_println!("Replica {} has received a PP {:?}", self.id, pp);
 
         let pp_seq_num = pp.seqnum;
         if pp_seq_num < self.seqnum.get() {
@@ -594,9 +640,8 @@ impl Replica {
         );
         self.send_message_to_all_replicas(&p);
 
-        // create consensus and updathashmap
+        // create consensus and update hashmap
         // maybe we already received a P and already have a consensus
-        let mut need_to_handle_prepare = false;
         {
             let mut borrowed_consensus = self.consensus.borrow_mut();
             if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
@@ -611,7 +656,6 @@ impl Replica {
                 consensus.batch = batch;
                 consensus.pp = Some(m);
                 // consensus.p.add(self.id, p); // done by the call below
-                need_to_handle_prepare = true;
             } else {
                 /*
                 println!(
@@ -620,8 +664,8 @@ impl Replica {
                 );
                 */
 
-                let mut pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
-                pq.add(self.id, p.clone());
+                let pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
+                //pq.add(self.id, p.clone()); // done by self.handle_prepare(p) below
                 let consensus = Consensus {
                     batch,
                     pp: Some(m),
@@ -634,15 +678,13 @@ impl Replica {
         }
 
         // need to be here so we don't call it while the consensus is borrowed as mutable
-        if need_to_handle_prepare {
-            self.handle_prepare(p);
-        }
+        self.handle_prepare(p);
     }
 
     fn handle_prepare(&self, m: RawMessage) {
         let p = m.message::<Prepare>();
 
-        //println!("Replica {} has received a P {:?}", self.id, p);
+        dbg_println!("Replica {} has received a P {:?}", self.id, p);
 
         let prepare_seq_num = p.seqnum;
         if prepare_seq_num < self.seqnum.get() {
@@ -680,6 +722,7 @@ impl Replica {
                 .insert(prepare_seq_num, consensus);
         }
 
+        let mut consensus_prepare_is_already_complete = false;
         let mut consensus_prepare_is_complete = false;
 
         // this new scope is necessary to ensure the current mut borrow finishes before we borrow_mut again in
@@ -696,6 +739,7 @@ impl Replica {
                             .seqnum
                             == prepare_seq_num)
                 {
+                    consensus_prepare_is_already_complete = consensus.p.is_complete();
                     consensus.p.add(p.r, m);
                     consensus_prepare_is_complete = consensus.p.is_complete();
 
@@ -711,23 +755,30 @@ impl Replica {
                         self.id, p.seqnum, consensus.pp, p
                     );
                 }
+            } else {
+                panic!(
+                    "Replica {} doesn't have a consensus for {}",
+                    self.id, p.seqnum
+                );
             }
+        }
 
-            if consensus_prepare_is_complete {
-                // create <C, v, n, r, req_digest>_mac and send it to all replicas
-                let c = RawMessage::new_commit(self.v, prepare_seq_num, self.id);
-                self.send_message_to_all_replicas(&c);
+        // if the quorum of prepare was already complete then we have already sent a commit,
+        // so no need to do it again.
+        if !consensus_prepare_is_already_complete && consensus_prepare_is_complete {
+            // create <C, v, n, r, req_digest>_mac and send it to all replicas
+            let c = RawMessage::new_commit(self.v, prepare_seq_num, self.id);
+            self.send_message_to_all_replicas(&c);
 
-                //consensus.c.add(self.id, c);
-                self.handle_commit(c);
-            }
+            //consensus.c.add(self.id, c);
+            self.handle_commit(c);
         }
     }
 
     fn handle_commit(&self, m: RawMessage) {
         let c = m.message::<Commit>();
 
-        //println!("Replica {} has received a C {:?}", self.id, c);
+        dbg_println!("Replica {} has received a C {:?}", self.id, c);
 
         if c.seqnum < self.seqnum.get() {
             /*
