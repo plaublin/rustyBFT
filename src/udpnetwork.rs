@@ -1,6 +1,7 @@
 use crate::configuration::{Node, READ_TIMEOUT_MS};
 use crate::message::RawMessage;
 use crate::network::*;
+use std::io::ErrorKind;
 use std::net::UdpSocket;
 
 // Network stuff
@@ -61,7 +62,7 @@ impl NetworkLayer for UDPNetwork {
                 }
                 // With many clients and large messages the primary can fail to send with
                 // an Err("Ressource not available"), so don't panic!
-                // We should check what kind of error it is and panic for some of them but not all
+                Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => panic!("{}", e),
             };
         }
