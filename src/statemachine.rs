@@ -673,13 +673,15 @@ impl Replica {
             nreqs += 1;
         }
 
-        while !SPECULATIVE_VERIFICATION && nreqs > 0 {
-            let batch_request = self.batch_crypto_to_smr_receiver.recv().unwrap();
-            //println!("Received request {:?} from crypto threads", batch_request);
-            if !batch_request.inner.is_empty() {
-                batch.push(batch_request);
+        if !SPECULATIVE_VERIFICATION {
+            while nreqs > 0 {
+                let batch_request = self.batch_crypto_to_smr_receiver.recv().unwrap();
+                //println!("Received request {:?} from crypto threads", batch_request);
+                if !batch_request.inner.is_empty() {
+                    batch.push(batch_request);
+                }
+                nreqs -= 1;
             }
-            nreqs -= 1;
         }
 
         // create request digest, or keep the original request if small enough
@@ -707,22 +709,9 @@ impl Replica {
 
         // create consensus and update hashmap
         // maybe we already received a P and already have a consensus
-        // TODO we can merge these 2, to make the code more rust-like
         {
             let mut borrowed_consensus = self.consensus.borrow_mut();
-            if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
-                //FIXME ideally we would need to check that the existing consensus is compatible with
-                //this pre-prepare
-                /*
-                println!(
-                    "I already have a consensus for {}; adding the P {:?}",
-                    pp_seq_num, p
-                );
-                */
-                consensus.batch = batch;
-                consensus.pp = Some(m);
-                // consensus.p.add(self.id, p); // done by the call below
-            } else {
+            let consensus = borrowed_consensus.entry(pp_seq_num).or_insert_with(|| {
                 /*
                 println!(
                     "Create a new consensus for {}; adding the P {:?}",
@@ -730,17 +719,16 @@ impl Replica {
                 );
                 */
 
-                let pq = Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f));
-                //pq.add(self.id, p.clone()); // done by self.handle_prepare(p) below
-                let consensus = Consensus {
-                    batch,
-                    pp: Some(m),
-                    p: pq,
+                Consensus {
+                    batch: vec![],
+                    pp: None,
+                    p: Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f)),
                     c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
                     rep: None,
-                };
-                borrowed_consensus.insert(pp_seq_num, consensus);
-            }
+                }
+            });
+            consensus.batch = batch;
+            consensus.pp = Some(m);
         }
 
         // need to be here so we don't call it while the consensus is borrowed as mutable
@@ -763,69 +751,60 @@ impl Replica {
             return;
         }
 
-        // there might not be a consensus yet because we didn't receive the PP yet, but we
-        // still need to keep the prepare
-        // we have a new scope to ensure the borrows is as short as possible
-        // TODO we can merge these 2, to make the code more rust-like
-        let no_consensus = { self.consensus.borrow().get(&prepare_seq_num).is_none() };
-        if !self.is_primary() && no_consensus {
-            /*
-            println!(
-                "Replica {} cannot find consensus for P {}",
-                self.id, prepare_seq_num
-            );
-            */
-
-            // add the consensus
-            let consensus = Consensus {
-                batch: vec![],
-                pp: None,
-                p: Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f)),
-                c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
-                rep: None,
-            };
-            self.consensus
-                .borrow_mut()
-                .insert(prepare_seq_num, consensus);
-        }
-
         let mut consensus_prepare_is_already_complete = false;
         let mut consensus_prepare_is_complete = false;
 
-        // this new scope is necessary to ensure the current mut borrow finishes before we borrow_mut again in
-        // handle_commit
+        // there might not be a consensus yet because we didn't receive the PP yet, but we
+        // still need to keep the prepare
+        // the new scope is here to ensure the borrows ends before the call to handle_commit()
         {
-            if let Some(consensus) = self.consensus.borrow_mut().get_mut(&prepare_seq_num) {
-                if consensus.pp.is_none()
-                    || (consensus.pp.as_ref().unwrap().message::<PrePrepare>().v == p.v
-                        && consensus
-                            .pp
-                            .as_ref()
-                            .unwrap()
-                            .message::<PrePrepare>()
-                            .seqnum
-                            == prepare_seq_num)
-                {
-                    consensus_prepare_is_already_complete = consensus.p.is_complete();
-                    consensus.p.add(p.r, m);
-                    consensus_prepare_is_complete = consensus.p.is_complete();
+            let mut borrowed_consensus = self.consensus.borrow_mut();
+            let consensus = borrowed_consensus
+                .entry(prepare_seq_num)
+                .or_insert_with(|| {
+                    assert!(!self.is_primary());
 
                     /*
                     println!(
-                        "Consensus add P {:?}, complete? {}",
-                        m, consensus_prepare_is_complete
+                        "Replica {} cannot find consensus for P {}",
+                        self.id, prepare_seq_num
                     );
                     */
-                } else {
-                    println!(
-                        "Replica {} has a consensus for {} but the PP doesn't match: {:?} != {:?}",
-                        self.id, p.seqnum, consensus.pp, p
-                    );
-                }
+
+                    // add the consensus
+                    Consensus {
+                        batch: vec![],
+                        pp: None,
+                        p: Quorum::new(self.n as usize, Consensus::prepare_quorum_size(self.f)),
+                        c: Quorum::new(self.n as usize, Consensus::commit_quorum_size(self.f)),
+                        rep: None,
+                    }
+                });
+
+            if consensus.pp.is_none()
+                || (consensus.pp.as_ref().unwrap().message::<PrePrepare>().v == p.v
+                    && consensus
+                        .pp
+                        .as_ref()
+                        .unwrap()
+                        .message::<PrePrepare>()
+                        .seqnum
+                        == prepare_seq_num)
+            {
+                consensus_prepare_is_already_complete = consensus.p.is_complete();
+                consensus.p.add(p.r, m);
+                consensus_prepare_is_complete = consensus.p.is_complete();
+
+                /*
+                println!(
+                    "Consensus add P {:?}, complete? {}",
+                    m, consensus_prepare_is_complete
+                );
+                */
             } else {
-                panic!(
-                    "Replica {} doesn't have a consensus for {}",
-                    self.id, p.seqnum
+                println!(
+                    "Replica {} has a consensus for {} but the PP doesn't match: {:?} != {:?}",
+                    self.id, p.seqnum, consensus.pp, p
                 );
             }
         }
