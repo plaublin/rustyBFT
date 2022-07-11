@@ -17,6 +17,9 @@ pub const MAX_PENDING_CONSENSUS: usize = 1;
 /// True if run in hybrid mode, i.e., n = 2f+1 instead of n = 3f+1
 pub const HYBRID_MODE: bool = false;
 
+/// True if client requests are verified while the consensus is done
+pub const SPECULATIVE_VERIFICATION: bool = false;
+
 /// True => will print the messages received and sent
 pub const DEBUG_PRINT_MESSAGES: bool = false;
 

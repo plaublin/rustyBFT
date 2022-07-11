@@ -8,6 +8,7 @@ use crate::udpnetwork::UDPNetwork;
 use crossbeam_channel::{Receiver, Sender};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::rc::Rc;
@@ -170,8 +171,12 @@ pub struct Replica {
     crypto_to_smr_receiver: Receiver<RawMessage>,
     batch_smr_to_crypto_sender: Sender<RawMessage>,
     batch_crypto_to_smr_receiver: Receiver<RawMessage>,
+    speculative_smr_to_crypto_sender: Sender<RawMessage>,
+    speculative_crypto_to_smr_receiver: Receiver<(u32, u64, bool)>,
     consensus: RefCell<BTreeMap<u64, Consensus>>, // the current consensus
     pending_req: RefCell<VecDeque<RawMessage>>,   // for batching
+    // We assume there is at most 1 pending request per client
+    speculatively_verified: RefCell<HashMap<u32, (u64, bool)>>, // speculative verification result.
     stats: Cell<Statistics>,
 }
 
@@ -205,12 +210,13 @@ fn create_crypto_threads(
     id: u32,
     nodes: Vec<Node>,
     nthreads: usize,
-    smr_to_crypto: Receiver<(u32, RawMessage)>,
-    crypto_to_smr: Sender<RawMessage>,
-    crypto_to_net: Sender<(u32, RawMessage)>,
-    net_to_crypto: Receiver<RawMessage>,
-    batch_smr_to_crypto: Receiver<RawMessage>,
-    batch_crypto_to_smr: Sender<RawMessage>,
+    (smr_to_crypto, crypto_to_smr): (Receiver<(u32, RawMessage)>, Sender<RawMessage>),
+    (crypto_to_net, net_to_crypto): (Sender<(u32, RawMessage)>, Receiver<RawMessage>),
+    (batch_smr_to_crypto, batch_crypto_to_smr): (Receiver<RawMessage>, Sender<RawMessage>),
+    (speculative_smr_to_crypto_receiver, speculative_crypto_to_smr_sender): (
+        Receiver<RawMessage>,
+        Sender<(u32, u64, bool)>,
+    ),
 ) {
     for t in 0..nthreads {
         let n = nodes.clone();
@@ -222,6 +228,9 @@ fn create_crypto_threads(
         // use to verify the batch of requests in the PP in parallel
         let batch_s2c = batch_smr_to_crypto.clone();
         let batch_c2s = batch_crypto_to_smr.clone();
+
+        let speculative_s2c = speculative_smr_to_crypto_receiver.clone();
+        let speculative_c2s = speculative_crypto_to_smr_sender.clone();
 
         let _ = thread::spawn(move || {
             println!("Starting smr to network crypto thread {}/{}", t, nthreads);
@@ -240,7 +249,10 @@ fn create_crypto_threads(
                 if let Ok(mut m) = n2c.try_recv() {
                     //println!("{} will verify {:?}", t, m);
                     let mut valid = crypto.message_authentication_is_valid(&mut m);
-                    if valid && m.message_type() == MessageType::Request {
+                    if valid
+                        && m.message_type() == MessageType::Request
+                        && !SPECULATIVE_VERIFICATION
+                    {
                         valid = crypto.request_signature_is_valid(&mut m)
                     }
 
@@ -259,6 +271,17 @@ fn create_crypto_threads(
                         m = RawMessage::new(0);
                     }
                     batch_c2s.send(m).unwrap();
+                }
+
+                // speculative verification: receive a request, respond with (cid, rid, valid)
+                //speculative_smr_to_crypto_sender: Sender<RawMessage>,
+                //speculative_crypto_to_smr_receiver: Receiver<(u32, u64, bool)>,
+                if let Ok(mut m) = speculative_s2c.try_recv() {
+                    assert!(m.message_type() == MessageType::Request);
+                    let r = m.message::<Request>();
+                    speculative_c2s
+                        .send((r.c, r.seqnum, crypto.request_signature_is_valid(&mut m)))
+                        .unwrap();
                 }
             }
         });
@@ -283,6 +306,11 @@ impl Replica {
         let (batch_crypto_to_smr_sender, batch_crypto_to_smr_receiver) =
             crossbeam_channel::unbounded();
 
+        let (speculative_smr_to_crypto_sender, speculative_smr_to_crypto_receiver) =
+            crossbeam_channel::unbounded();
+        let (speculative_crypto_to_smr_sender, speculative_crypto_to_smr_receiver) =
+            crossbeam_channel::unbounded();
+
         create_network_thread(
             id,
             nodes.clone(),
@@ -293,12 +321,13 @@ impl Replica {
             id,
             nodes.clone(),
             crypto_threads,
-            smr_to_crypto_receiver,
-            crypto_to_smr_sender,
-            crypto_to_net_sender,
-            net_to_crypto_receiver,
-            batch_smr_to_crypto_receiver,
-            batch_crypto_to_smr_sender,
+            (smr_to_crypto_receiver, crypto_to_smr_sender),
+            (crypto_to_net_sender, net_to_crypto_receiver),
+            (batch_smr_to_crypto_receiver, batch_crypto_to_smr_sender),
+            (
+                speculative_smr_to_crypto_receiver,
+                speculative_crypto_to_smr_sender,
+            ),
         );
 
         let stats = Statistics {
@@ -321,8 +350,11 @@ impl Replica {
             crypto_to_smr_receiver,
             batch_smr_to_crypto_sender,
             batch_crypto_to_smr_receiver,
+            speculative_smr_to_crypto_sender,
+            speculative_crypto_to_smr_receiver,
             consensus: RefCell::new(BTreeMap::new()),
             pending_req: RefCell::new(VecDeque::new()),
+            speculatively_verified: RefCell::new(HashMap::new()),
             stats: Cell::new(stats),
         }
     }
@@ -352,6 +384,8 @@ impl Replica {
                     }
                 }
             }
+
+            self.receive_speculatively_verified_requests();
 
             self.execute_requests_and_reply(f);
 
@@ -414,6 +448,22 @@ impl Replica {
         }
     }
 
+    fn receive_speculatively_verified_requests(&self) {
+        if !SPECULATIVE_VERIFICATION {
+            return;
+        }
+
+        // While there are messages in the queue, receive them and insert into the hashmap of
+        // validated requests. A message is (cid, rid, valid?).
+        while !self.speculative_crypto_to_smr_receiver.is_empty() {
+            if let Ok((cid, rid, valid)) = self.speculative_crypto_to_smr_receiver.recv() {
+                self.speculatively_verified
+                    .borrow_mut()
+                    .insert(cid, (rid, valid));
+            }
+        }
+    }
+
     fn handle_request(&self, request: RawMessage) {
         assert!(request.message_type() == MessageType::Request);
 
@@ -424,6 +474,13 @@ impl Replica {
         if !self.is_primary() {
             // maybe we have a reply? If so then retransmit it
             unimplemented!();
+        }
+
+        if SPECULATIVE_VERIFICATION {
+            // Speculative verification, send request to queue for verification
+            self.speculative_smr_to_crypto_sender
+                .send(request.clone())
+                .unwrap();
         }
 
         let mut pending = self.pending_req.borrow_mut();
@@ -582,6 +639,7 @@ impl Replica {
         }
 
         // deserialize the batch
+        let mut batch = Vec::<RawMessage>::new();
         let payload = m.message_payload::<PrePrepare>().unwrap();
         let mut offset = 0;
         let mut nreqs = 0;
@@ -602,13 +660,20 @@ impl Replica {
             }
 
             //println!("Send request {:?} to crypto threads", batch_request);
-            self.batch_smr_to_crypto_sender.send(batch_request).unwrap();
+            if SPECULATIVE_VERIFICATION {
+                // Speculative verification, send request to queue for verification
+                self.speculative_smr_to_crypto_sender
+                    .send(batch_request.clone())
+                    .unwrap();
+                batch.push(batch_request);
+            } else {
+                self.batch_smr_to_crypto_sender.send(batch_request).unwrap();
+            }
             offset += len;
             nreqs += 1;
         }
 
-        let mut batch = Vec::<RawMessage>::new();
-        while nreqs > 0 {
+        while !SPECULATIVE_VERIFICATION && nreqs > 0 {
             let batch_request = self.batch_crypto_to_smr_receiver.recv().unwrap();
             //println!("Received request {:?} from crypto threads", batch_request);
             if !batch_request.inner.is_empty() {
@@ -642,6 +707,7 @@ impl Replica {
 
         // create consensus and update hashmap
         // maybe we already received a P and already have a consensus
+        // TODO we can merge these 2, to make the code more rust-like
         {
             let mut borrowed_consensus = self.consensus.borrow_mut();
             if let Some(consensus) = borrowed_consensus.get_mut(&pp_seq_num) {
@@ -700,6 +766,7 @@ impl Replica {
         // there might not be a consensus yet because we didn't receive the PP yet, but we
         // still need to keep the prepare
         // we have a new scope to ensure the borrows is as short as possible
+        // TODO we can merge these 2, to make the code more rust-like
         let no_consensus = { self.consensus.borrow().get(&prepare_seq_num).is_none() };
         if !self.is_primary() && no_consensus {
             /*
@@ -880,24 +947,69 @@ impl Replica {
                 && consensus.p.is_complete()
                 && consensus.c.is_complete()
             {
-                /*
-                println!(
-                    "Replica {} executes {} requests for consensus {}; last exec is {}",
-                    self.id,
-                    consensus.batch.len(),
-                    consensus_num,
-                    self.seqnum.get()
-                );
-                */
+                let can_execute = if SPECULATIVE_VERIFICATION {
+                    let mut can_execute = true;
+                    for request in consensus.batch.iter() {
+                        let r = request.message::<Request>();
+                        if let Some((s, v)) = self.speculatively_verified.borrow().get(&r.c) {
+                            if *s != r.seqnum || !v {
+                                /*
+                                println!(
+                                    "Request ({}, {}) not verified yet (seqnum = {}) \
+                                    or invalid signature (verif = {})",
+                                    r.c, r.seqnum, *s, v
+                                );
+                                */
+                                can_execute = false;
+                                break;
+                            }
+                        } else {
+                            // println!("Request ({}, {}) not verified yet", r.c, r.seqnum);
+                            can_execute = false;
+                            break;
+                        }
+                    }
+                    can_execute
+                } else {
+                    true
+                };
 
-                for request in consensus.batch.iter() {
-                    let reply = self.execute_single_request(f, request);
-                    self.send_message(request.message::<Request>().c, reply);
+                if can_execute {
+                    /*
+                    println!(
+                        "Replica {} executes {} requests for consensus {}; last exec is {}",
+                        self.id,
+                        consensus.batch.len(),
+                        consensus_num,
+                        self.seqnum.get()
+                    );
+                    */
+
+                    for request in consensus.batch.iter() {
+                        let r = request.message::<Request>();
+                        if !SPECULATIVE_VERIFICATION
+                            || self.speculatively_verified.borrow()[&r.c] == (r.seqnum, true)
+                        {
+                            let reply = self.execute_single_request(f, request);
+                            self.send_message(request.message::<Request>().c, reply);
+                        } else {
+                            /*
+                            println!(
+                                "Execute request ({}, {}): speculative verification == {},\
+                                entry = {:?}",
+                                r.c,
+                                r.seqnum,
+                                SPECULATIVE_VERIFICATION,
+                                self.speculatively_verified.borrow().get(&r.c)
+                            );
+                            */
+                        }
+                    }
+
+                    //FIXME we never save the reply
+                    //consensus.rep = Some(rep);
+                    self.seqnum.set(consensus_num + 1);
                 }
-
-                //FIXME we never save the reply
-                //consensus.rep = Some(rep);
-                self.seqnum.set(consensus_num + 1);
             }
         }
 
