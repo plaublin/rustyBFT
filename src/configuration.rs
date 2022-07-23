@@ -36,7 +36,8 @@ macro_rules! dbg_println {
 pub struct Node {
     pub id: u32,
     pub ip: String,
-    pub port: u16,
+    pub replica_port: u16,
+    pub client_port: u16,
     pub digest_key: String,
     pub signature_key: String,
 }
@@ -56,11 +57,17 @@ pub fn parse_configuration_file(config: &str) -> Vec<Node> {
             .unwrap_or_else(|| panic!("Malformed line \"{}\"", line))
             .to_string();
 
-        let port = split
+        let replica_port = split
             .next()
             .unwrap_or_else(|| panic!("Malformed line \"{}\"", line))
             .parse::<u16>()
-            .expect("Invalid port number");
+            .expect("Invalid replica port number");
+
+        let client_port = split
+            .next()
+            .unwrap_or_else(|| panic!("Malformed line \"{}\"", line))
+            .parse::<u16>()
+            .expect("Invalid client port number");
 
         let digest_key = split
             .next()
@@ -75,7 +82,8 @@ pub fn parse_configuration_file(config: &str) -> Vec<Node> {
         nodes.push(Node {
             id,
             ip,
-            port,
+            replica_port,
+            client_port,
             digest_key,
             signature_key,
         });

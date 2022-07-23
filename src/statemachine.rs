@@ -33,7 +33,7 @@ impl Client {
 
         let nodes = parse_configuration_file(config);
         let crypto = CryptoLayer::new(id, &nodes);
-        let network = UDPNetwork::new(id, false, &nodes);
+        let network = UDPNetwork::new(id, false, false, &nodes);
 
         Self {
             n,
@@ -182,23 +182,36 @@ pub struct Replica {
 
 fn create_network_thread(
     id: u32,
+    n: u32,
     nodes: Vec<Node>,
     net_to_crypto: Sender<RawMessage>,
     crypto_to_net: Receiver<(u32, RawMessage)>,
 ) {
     let _ = thread::spawn(move || {
         println!("Starting the network thread");
-        let network = UDPNetwork::new(id, true, &nodes);
+        let replica_network = UDPNetwork::new(id, true, true, &nodes);
+        let client_network = UDPNetwork::new(id, true, false, &nodes);
 
         loop {
             while !crypto_to_net.is_empty() {
                 if let Ok((i, m)) = crypto_to_net.recv() {
                     //println!("net sends {:?} to {}", m, i);
-                    network.send(i, &m);
+                    if i < n {
+                        replica_network.send(i, &m);
+                    } else {
+                        client_network.send(i, &m);
+                    }
                 }
             }
 
-            if let Ok(m) = network.receive() {
+            // First receive messages from other replicas
+            while let Ok(m) = replica_network.receive() {
+                //println!("net has received {:?} and sends it to crypto", m);
+                net_to_crypto.send(m).unwrap();
+            }
+
+            // and then receive messages from clients
+            if let Ok(m) = client_network.receive() {
                 //println!("net has received {:?} and sends it to crypto", m);
                 net_to_crypto.send(m).unwrap();
             }
@@ -313,6 +326,7 @@ impl Replica {
 
         create_network_thread(
             id,
+            n,
             nodes.clone(),
             net_to_crypto_sender,
             crypto_to_net_receiver,

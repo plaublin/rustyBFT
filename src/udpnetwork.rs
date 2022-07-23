@@ -12,7 +12,7 @@ pub struct UDPNetwork {
 }
 
 impl NetworkLayer for UDPNetwork {
-    fn new(id: u32, nonblocking: bool, config: &[Node]) -> Self
+    fn new(id: u32, nonblocking: bool, use_replica_port: bool, config: &[Node]) -> Self
     where
         Self: Sized,
     {
@@ -25,7 +25,15 @@ impl NetworkLayer for UDPNetwork {
                 );
             }
 
-            addr.push(format!("{}:{}", node.ip, node.port));
+            addr.push(format!(
+                "{}:{}",
+                node.ip,
+                if use_replica_port {
+                    node.replica_port
+                } else {
+                    node.client_port
+                }
+            ));
         }
 
         if id as usize >= addr.len() {
