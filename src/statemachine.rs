@@ -507,7 +507,7 @@ impl Replica {
         }
 
         // if too many consensus in progress then forget about creating a new one for now
-        if self.consensus.borrow().len() > MAX_PENDING_CONSENSUS {
+        if self.consensus.borrow().len() >= MAX_PENDING_CONSENSUS {
             return;
         }
 
