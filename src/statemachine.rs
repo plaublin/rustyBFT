@@ -4,13 +4,18 @@ use crate::dbg_println;
 use crate::message::*;
 use crate::network::NetworkLayer;
 use crate::quorum::Quorum;
+#[cfg(feature = "udpdk")]
+use crate::udpdknetwork::UDPDKNetwork;
 use crate::udpnetwork::UDPNetwork;
 use crossbeam_channel::{Receiver, Sender};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::io::ErrorKind;
 use std::io::Write;
+#[cfg(feature = "udpdk")]
+use std::process;
 use std::rc::Rc;
 use std::{thread, time};
 
@@ -187,10 +192,28 @@ fn create_network_thread(
     net_to_crypto: Sender<RawMessage>,
     crypto_to_net: Receiver<(u32, RawMessage)>,
 ) {
+    #[cfg(feature = "udpdk")]
+    if USE_UDPDK {
+        UDPDKNetwork::initialize();
+    }
+
     let _ = thread::spawn(move || {
+        fn get_network_layer(
+            id: u32,
+            nonblocking: bool,
+            use_replica_port: bool,
+            nodes: &[Node],
+        ) -> Box<dyn NetworkLayer> {
+            #[cfg(feature = "udpdk")]
+            if USE_UDPDK {
+                return Box::new(UDPDKNetwork::new(id, nonblocking, use_replica_port, nodes));
+            }
+            return Box::new(UDPNetwork::new(id, nonblocking, use_replica_port, nodes));
+        }
+
         println!("Starting the network thread");
-        let replica_network = UDPNetwork::new(id, true, true, &nodes);
-        let client_network = UDPNetwork::new(id, true, false, &nodes);
+        let replica_network = get_network_layer(id, true, true, &nodes);
+        let client_network = get_network_layer(id, true, false, &nodes);
 
         loop {
             while !crypto_to_net.is_empty() {
@@ -211,9 +234,16 @@ fn create_network_thread(
             }
 
             // and then receive messages from clients
-            if let Ok(m) = client_network.receive() {
-                //println!("net has received {:?} and sends it to crypto", m);
-                net_to_crypto.send(m).unwrap();
+            match client_network.receive() {
+                Ok(m) => {
+                    //println!("net has received {:?} and sends it to crypto", m);
+                    net_to_crypto.send(m).unwrap();
+                }
+                Err(e) => {
+                    if e.kind() != ErrorKind::WouldBlock {
+                        println!("Error {}", e);
+                    }
+                }
             }
         }
     });
@@ -331,6 +361,7 @@ impl Replica {
             net_to_crypto_sender,
             crypto_to_net_receiver,
         );
+
         create_crypto_threads(
             id,
             nodes.clone(),

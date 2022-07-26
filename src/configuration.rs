@@ -20,6 +20,10 @@ pub const HYBRID_MODE: bool = false;
 /// True if client requests are verified while the consensus is done
 pub const SPECULATIVE_VERIFICATION: bool = false;
 
+/// True if replica use UDPDK instead of the Linux sockets
+#[cfg(feature = "udpdk")]
+pub const USE_UDPDK: bool = false;
+
 /// True => will print the messages received and sent
 pub const DEBUG_PRINT_MESSAGES: bool = false;
 

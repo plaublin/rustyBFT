@@ -4,4 +4,6 @@ pub mod message;
 pub mod network;
 pub mod quorum;
 pub mod statemachine;
+#[cfg(feature = "udpdk")]
+pub mod udpdknetwork;
 pub mod udpnetwork;
