@@ -28,10 +28,10 @@ fn main() {
     } else {
         args[7].parse::<f32>().unwrap()
     };
+    let malicious_nc = ((nc as f32) * malicious_ratio) as u32;
 
     let mut handles = Vec::new();
     let (tx, rx) = mpsc::channel();
-    let malicious_nc = ((nc as f32) * malicious_ratio) as u32;
     for i in 0..nc {
         let config = args[1].clone();
         let my_tx = tx.clone();
@@ -55,7 +55,8 @@ fn main() {
                 if is_malicious {
                     let req = smr.create_malicious_request(reqlen);
                     smr.send_request(&req);
-                    std::thread::sleep(time::Duration::from_micros(100));
+                    std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
+                    //std::thread::sleep(time::Duration::from_millis(1));
                 } else {
                     let req = smr.create_request(reqlen);
 
@@ -100,8 +101,10 @@ fn main() {
     let mut global_lat = 0;
     for h in handles {
         let (thr, lat) = rx.recv().unwrap();
-        global_thr += thr;
-        global_lat += lat;
+        if thr > 0.0 && lat > 0 {
+            global_thr += thr;
+            global_lat += lat;
+        }
 
         let _ = h.join();
     }
@@ -109,6 +112,6 @@ fn main() {
     println!(
         "Global stats: thr = {} ops/s, lat = {} usec",
         global_thr,
-        global_lat / (nc as u128),
+        global_lat / ((nc - malicious_nc) as u128),
     );
 }
