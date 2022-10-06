@@ -64,7 +64,14 @@ impl Client {
         request
     }
 
-    fn send_request(&self, req: &RawMessage) {
+    // Create a request that is not signed correctly
+    pub fn create_malicious_request(&self, reqlen: usize) -> RawMessage {
+        let mut request = RawMessage::new_request(self.id, self.seqnum.get(), reqlen);
+        self.crypto.authenticate_message(self.primary, &mut request);
+        request
+    }
+
+    pub fn send_request(&self, req: &RawMessage) {
         self.network.send(self.primary, req);
     }
 
