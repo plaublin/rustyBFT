@@ -41,8 +41,7 @@ impl NetworkLayer for UnixSocketNetwork {
         }
 
         println!("Binding node {} to {}", id, addr[id as usize]);
-        let socket =
-            UnixDatagram::bind(addr[id as usize].to_string()).expect("Cannot bind local socket");
+        let socket = UnixDatagram::bind(&addr[id as usize]).expect("Cannot bind local socket");
         let _ = socket.set_nonblocking(nonblocking);
         socket
             .set_read_timeout(Some(READ_TIMEOUT_MS))
