@@ -55,8 +55,8 @@ fn main() {
                 if is_malicious {
                     let req = smr.create_malicious_request(reqlen);
                     smr.send_request(&req);
-                    std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
-                    //std::thread::sleep(time::Duration::from_millis(1));
+                    //std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
+                    std::thread::sleep(time::Duration::from_millis(1));
                 } else {
                     let req = smr.create_request(reqlen);
 
