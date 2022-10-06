@@ -1,7 +1,7 @@
 use crate::configuration::MAX_MESSAGE_LENGTH;
 use crate::crypto::CryptoLayer;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum MessageType {
     Request,
     Reply,
