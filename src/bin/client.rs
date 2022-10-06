@@ -3,13 +3,16 @@ use std::sync::mpsc;
 use std::{thread, time};
 
 fn print_usage(cmd: &str) {
-    eprintln!("Usage: {} config f id nclients duration_seq reqlen", cmd);
+    eprintln!(
+        "Usage: {} config f id nclients duration_seq reqlen [malicious_ratio]",
+        cmd
+    );
 }
 
 fn main() {
     // read command line
     let args: Vec<String> = env::args().collect();
-    if args.len() < 6 {
+    if args.len() < 7 {
         print_usage(&args[0]);
         return;
     }
@@ -20,6 +23,12 @@ fn main() {
     let nc = args[4].parse::<u32>().unwrap();
     let duration = time::Duration::from_millis(args[5].parse::<u64>().unwrap() * 1000);
     let reqlen = args[6].parse::<usize>().unwrap();
+    let malicious_ratio = if args.len() < 8 {
+        0.0
+    } else {
+        args[7].parse::<f32>().unwrap()
+    };
+    let malicious_nc = ((nc as f32) * malicious_ratio) as u32;
 
     let mut handles = Vec::new();
     let (tx, rx) = mpsc::channel();
@@ -29,8 +38,10 @@ fn main() {
         let h = thread::spawn(move || {
             let smr = rusty_bft::statemachine::Client::new(&config, f, id + i);
 
+            let is_malicious = i < malicious_nc;
             println!(
-                "Hello, world! I'm client {}: {:?}",
+                "Hello, world! I'm {}client {}: {:?}",
+                if is_malicious { "malicious " } else { "" },
                 smr.id,
                 smr.my_address()
             );
@@ -41,17 +52,24 @@ fn main() {
             let start = time::Instant::now();
             while start.elapsed() < duration {
                 // create request
-                let req = smr.create_request(reqlen);
+                if is_malicious {
+                    let req = smr.create_malicious_request(reqlen);
+                    smr.send_request(&req);
+                    std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
+                    //std::thread::sleep(time::Duration::from_millis(1));
+                } else {
+                    let req = smr.create_request(reqlen);
 
-                let lat_start = time::Instant::now();
-                let _ = smr.invoke(&req);
-                let lat = lat_start.elapsed().as_micros();
+                    let lat_start = time::Instant::now();
+                    let _ = smr.invoke(&req);
+                    let lat = lat_start.elapsed().as_micros();
 
-                accepted += 1;
-                sum_lat += lat;
+                    accepted += 1;
+                    sum_lat += lat;
 
-                if accepted % 10000 == 0 {
-                    println!("Client {} accepted {}", smr.id, accepted);
+                    if accepted % 10000 == 0 {
+                        println!("Client {} accepted {}", smr.id, accepted);
+                    }
                 }
 
                 // std::thread::sleep(time::Duration::from_millis(1000));
@@ -83,8 +101,10 @@ fn main() {
     let mut global_lat = 0;
     for h in handles {
         let (thr, lat) = rx.recv().unwrap();
-        global_thr += thr;
-        global_lat += lat;
+        if thr > 0.0 && lat > 0 {
+            global_thr += thr;
+            global_lat += lat;
+        }
 
         let _ = h.join();
     }
@@ -92,6 +112,6 @@ fn main() {
     println!(
         "Global stats: thr = {} ops/s, lat = {} usec",
         global_thr,
-        global_lat / (nc as u128),
+        global_lat / ((nc - malicious_nc) as u128),
     );
 }
