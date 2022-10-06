@@ -18,11 +18,17 @@ pub const MAX_PENDING_CONSENSUS: usize = 1;
 pub const HYBRID_MODE: bool = false;
 
 /// True if client requests are verified while the consensus is done
-pub const SPECULATIVE_VERIFICATION: bool = false;
+pub const SPECULATIVE_VERIFICATION: bool = true;
+
+/// True if replicas blacklist nodes upon invalid signatures
+pub const BLACKLIST_NODES: bool = true;
 
 /// True if replica use UDPDK instead of the Linux sockets
 #[cfg(feature = "udpdk")]
 pub const USE_UDPDK: bool = false;
+
+/// True if nodes use Unix sockets instead of the Linux sockets (works only on localhost)
+pub const USE_UNIX_SOCKETS: bool = false;
 
 /// True => will print the messages received and sent
 pub const DEBUG_PRINT_MESSAGES: bool = false;

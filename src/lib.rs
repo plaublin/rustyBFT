@@ -7,3 +7,4 @@ pub mod statemachine;
 #[cfg(feature = "udpdk")]
 pub mod udpdknetwork;
 pub mod udpnetwork;
+pub mod unixsocketnetwork;
