@@ -24,6 +24,9 @@ pub const SPECULATIVE_VERIFICATION: bool = false;
 #[cfg(feature = "udpdk")]
 pub const USE_UDPDK: bool = false;
 
+/// True if nodes use Unix sockets instead of the Linux sockets (works only on localhost)
+pub const USE_UNIX_SOCKETS: bool = true;
+
 /// True => will print the messages received and sent
 pub const DEBUG_PRINT_MESSAGES: bool = false;
 

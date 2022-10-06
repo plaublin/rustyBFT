@@ -7,6 +7,7 @@ use crate::quorum::Quorum;
 #[cfg(feature = "udpdk")]
 use crate::udpdknetwork::UDPDKNetwork;
 use crate::udpnetwork::UDPNetwork;
+use crate::unixsocketnetwork::UnixSocketNetwork;
 use crossbeam_channel::{Receiver, Sender};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -40,7 +41,12 @@ impl Client {
 
         let nodes = parse_configuration_file(config);
         let crypto = CryptoLayer::new(id, &nodes);
-        let network = UDPNetwork::new(id, false, false, &nodes);
+
+        let network: Box<dyn NetworkLayer> = if USE_UNIX_SOCKETS {
+            Box::new(UnixSocketNetwork::new(id, false, false, &nodes))
+        } else {
+            Box::new(UDPNetwork::new(id, false, false, &nodes))
+        };
 
         Self {
             n,
@@ -50,7 +56,7 @@ impl Client {
             v: Cell::new(0),
             primary: 0,
             nodes,
-            network: Box::new(network),
+            network,
             crypto,
         }
     }
@@ -216,6 +222,14 @@ fn create_network_thread(
             #[cfg(feature = "udpdk")]
             if USE_UDPDK {
                 return Box::new(UDPDKNetwork::new(id, nonblocking, use_replica_port, nodes));
+            }
+            if USE_UNIX_SOCKETS {
+                return Box::new(UnixSocketNetwork::new(
+                    id,
+                    nonblocking,
+                    use_replica_port,
+                    nodes,
+                ));
             }
             return Box::new(UDPNetwork::new(id, nonblocking, use_replica_port, nodes));
         }
