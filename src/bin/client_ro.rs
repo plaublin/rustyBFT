@@ -4,7 +4,7 @@ use std::{thread, time};
 
 fn print_usage(cmd: &str) {
     eprintln!(
-        "Usage: {} config f id nclients duration_seq reqlen [malicious_ratio]",
+        "Usage: {} config f id nclients duration_seq reqlen [read-only_ratio]",
         cmd
     );
 }
@@ -23,12 +23,11 @@ fn main() {
     let nc = args[4].parse::<u32>().unwrap();
     let duration = time::Duration::from_millis(args[5].parse::<u64>().unwrap() * 1000);
     let reqlen = args[6].parse::<usize>().unwrap();
-    let malicious_ratio = if args.len() < 8 {
+    let ro_ratio = if args.len() < 8 {
         0.0
     } else {
         args[7].parse::<f32>().unwrap()
     };
-    let malicious_nc = ((nc as f32) * malicious_ratio) as u32;
 
     let mut handles = Vec::new();
     let (tx, rx) = mpsc::channel();
@@ -38,41 +37,50 @@ fn main() {
         let h = thread::spawn(move || {
             let smr = rusty_bft::statemachine::Client::new(&config, f, id + i);
 
-            let is_malicious = i < malicious_nc;
             println!(
-                "Hello, world! I'm {}client {}: {:?}",
-                if is_malicious { "malicious " } else { "" },
+                "Hello, world! I'm client {}: {:?}",
                 smr.id,
                 smr.my_address()
             );
 
             let mut accepted: u64 = 0;
+            let mut n_ro: u64 = 0;
             let mut sum_lat: u128 = 0;
 
             let start = time::Instant::now();
             while start.elapsed() < duration {
+                // compute ro ratio, is it a ro or rw request?
+                let n_ro_should_sent = (accepted as f32) * ro_ratio;
+                let ro = (n_ro as f32) < n_ro_should_sent;
+
                 // create request
-                if is_malicious {
-                    let req = smr.create_malicious_request(reqlen);
-                    smr.send_request(&req);
-                    //std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
-                    std::thread::sleep(time::Duration::from_millis(1));
+                let req = smr.create_request(ro, reqlen);
+
+                if ro {
+                    n_ro += 1;
+                    println!(
+                        "Client {} send ro request: {} / {}, ratio {}",
+                        smr.id,
+                        n_ro,
+                        accepted,
+                        (n_ro as f32) / (accepted as f32)
+                    );
                 } else {
-                    let req = smr.create_request(false, reqlen);
-
-                    let lat_start = time::Instant::now();
-                    let _ = smr.invoke(&req);
-                    let lat = lat_start.elapsed().as_micros();
-
-                    accepted += 1;
-                    sum_lat += lat;
-
-                    if accepted % 10000 == 0 {
-                        println!("Client {} accepted {}", smr.id, accepted);
-                    }
+                    println!("Client {} send rw request: {} / {}", smr.id, n_ro, accepted);
                 }
 
-                // std::thread::sleep(time::Duration::from_millis(1000));
+                let lat_start = time::Instant::now();
+                let _ = smr.invoke(&req);
+                let lat = lat_start.elapsed().as_micros();
+
+                accepted += 1;
+                sum_lat += lat;
+
+                if accepted % 10000 == 0 {
+                    println!("Client {} accepted {}", smr.id, accepted);
+                }
+
+                std::thread::sleep(time::Duration::from_millis(1000));
             }
 
             let duration = start.elapsed().as_secs_f64();
@@ -112,6 +120,6 @@ fn main() {
     println!(
         "Global stats: thr = {} ops/s, lat = {} usec",
         global_thr,
-        global_lat / ((nc - malicious_nc) as u128),
+        global_lat / (nc as u128),
     );
 }

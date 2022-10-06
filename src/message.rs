@@ -37,6 +37,7 @@ impl MessageType {
 #[repr(C)]
 pub struct Request {
     pub seqnum: u64, // seq num
+    pub ro: bool,    // read only?
     pub c: u32,      // client id
     pub len: usize,  // payload length
     pub signature: [u8; CryptoLayer::signature_length()], // request signature
@@ -347,7 +348,8 @@ impl RawMessage {
     }
 
     /// Create a new request from client `c` with seqnum `seqnum` and payload length `payload_len`
-    pub fn new_request(c: u32, seqnum: u64, payload_len: usize) -> Self {
+    /// if ro, then this is a read-only request
+    pub fn new_request(c: u32, ro: bool, seqnum: u64, payload_len: usize) -> Self {
         let mut raw_message = RawMessage::new_with_header(
             Request::message_type(),
             c,
@@ -356,6 +358,7 @@ impl RawMessage {
 
         let request: &mut Request = raw_message.message_mut();
         request.c = c;
+        request.ro = ro;
         request.seqnum = seqnum;
         request.len = payload_len;
 

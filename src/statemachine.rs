@@ -65,8 +65,8 @@ impl Client {
         &self.nodes[self.id as usize]
     }
 
-    pub fn create_request(&self, reqlen: usize) -> RawMessage {
-        let mut request = RawMessage::new_request(self.id, self.seqnum.get(), reqlen);
+    pub fn create_request(&self, ro: bool, reqlen: usize) -> RawMessage {
+        let mut request = RawMessage::new_request(self.id, ro, self.seqnum.get(), reqlen);
         self.crypto.sign_request(&mut request);
         self.crypto.authenticate_message(self.primary, &mut request);
         request
@@ -74,13 +74,22 @@ impl Client {
 
     // Create a request that is not signed correctly
     pub fn create_malicious_request(&self, reqlen: usize) -> RawMessage {
-        let mut request = RawMessage::new_request(self.id, self.seqnum.get(), reqlen);
+        let mut request = RawMessage::new_request(self.id, false, self.seqnum.get(), reqlen);
         self.crypto.authenticate_message(self.primary, &mut request);
         request
     }
 
     pub fn send_request(&self, req: &RawMessage) {
-        self.network.send(self.primary, req);
+        let r = req.message::<Request>();
+        if r.ro {
+            for i in 0..self.n {
+                let mut my_req = req.clone();
+                self.crypto.authenticate_message(i, &mut my_req);
+                self.network.send(i, &my_req);
+            }
+        } else {
+            self.network.send(self.primary, req);
+        }
     }
 
     fn accept_reply(&self) -> Option<RawMessage> {
@@ -110,6 +119,7 @@ impl Client {
             req.message_len(),
             req.message::<Request>()
         );
+
         self.send_request(req);
 
         let mut start = time::Instant::now();
@@ -501,7 +511,7 @@ impl Replica {
                 if let Ok(m) = self.crypto_to_smr_receiver.recv() {
                     //println!("\nReceived correctly authenticated message {:?}", m);
                     match m.message_type() {
-                        MessageType::Request => self.handle_request(m),
+                        MessageType::Request => self.handle_request(f, m),
                         MessageType::PrePrepare => self.handle_preprepare(m),
                         MessageType::Prepare => self.handle_prepare(m),
                         MessageType::Commit => self.handle_commit(m),
@@ -592,7 +602,7 @@ impl Replica {
         }
     }
 
-    fn handle_request(&self, request: RawMessage) {
+    fn handle_request(&self, f: &dyn Fn(Vec<u8>) -> Vec<u8>, request: RawMessage) {
         assert!(request.message_type() == MessageType::Request);
 
         let r = request.message::<Request>();
@@ -606,8 +616,19 @@ impl Replica {
             }
         }
 
-        // TODO read-only requests: verify + reply to client immediately
+        // read-only requests: verify + reply to client immediately
         // no need for speculative execution as there is no consensus
+        if r.ro {
+            self.batch_smr_to_crypto_sender
+                .send(request.clone())
+                .unwrap();
+            let m = self.batch_crypto_to_smr_receiver.recv().unwrap();
+            if !m.inner.is_empty() {
+                let reply = self.execute_single_request(f, &request);
+                self.send_message(r.c, reply);
+            }
+            return;
+        }
 
         // The client will retransmit to all and find the correct primary
         if !self.is_primary() {
