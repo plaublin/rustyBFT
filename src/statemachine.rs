@@ -11,12 +11,14 @@ use crossbeam_channel::{Receiver, Sender};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Write;
 #[cfg(feature = "udpdk")]
 use std::process;
 use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 use std::{thread, time};
 
 pub struct Client {
@@ -178,7 +180,7 @@ pub struct Replica {
     batch_crypto_to_smr_receiver: Receiver<RawMessage>,
     speculative_smr_to_crypto_sender: Sender<RawMessage>,
     speculative_crypto_to_smr_receiver: Receiver<(u32, u64, bool)>,
-    consensus: RefCell<BTreeMap<u64, Consensus>>, // the current consensus
+    consensus: RefCell<BTreeMap<u64, Consensus>>, // the current consensus; BTree is ordered
     pending_req: RefCell<VecDeque<RawMessage>>,   // for batching
     // We assume there is at most 1 pending request per client
     speculatively_verified: RefCell<HashMap<u32, (u64, bool)>>, // speculative verification result.
@@ -261,12 +263,15 @@ fn create_crypto_threads(
         Sender<(u32, u64, bool)>,
     ),
 ) {
+    let blacklist_lock = Arc::new(RwLock::new(HashSet::new()));
+
     for t in 0..nthreads {
         let n = nodes.clone();
         let s2c = smr_to_crypto.clone();
         let c2s = crypto_to_smr.clone();
         let c2n = crypto_to_net.clone();
         let n2c = net_to_crypto.clone();
+        let blist_lock = Arc::clone(&blacklist_lock);
 
         // use to verify the batch of requests in the PP in parallel
         let batch_s2c = batch_smr_to_crypto.clone();
@@ -276,7 +281,7 @@ fn create_crypto_threads(
         let speculative_c2s = speculative_crypto_to_smr_sender.clone();
 
         let _ = thread::spawn(move || {
-            println!("Starting smr to network crypto thread {}/{}", t, nthreads);
+            println!("Starting crypto thread {}/{}", t, nthreads);
             let crypto = CryptoLayer::new(id, &n);
 
             loop {
@@ -291,17 +296,48 @@ fn create_crypto_threads(
                 // receive from net, authenticate, and send to smr
                 if let Ok(mut m) = n2c.try_recv() {
                     //println!("{} will verify {:?}", t, m);
-                    let mut valid = crypto.message_authentication_is_valid(&mut m);
-                    if valid
-                        && m.message_type() == MessageType::Request
-                        && !SPECULATIVE_VERIFICATION
-                    {
-                        valid = crypto.request_signature_is_valid(&mut m)
+
+                    let mut blacklisted = false;
+                    let mut valid = false;
+
+                    // blacklist: if this is a request and the client is blacklisted then drop it
+                    if m.message_type() == MessageType::Request {
+                        let r = m.message::<Request>();
+                        {
+                            let blacklist = blist_lock.read().unwrap();
+                            blacklisted = blacklist.contains(&r.c);
+                        }
+                    }
+
+                    if !blacklisted {
+                        valid = crypto.message_authentication_is_valid(&mut m);
+                        if valid
+                            && m.message_type() == MessageType::Request
+                            && !SPECULATIVE_VERIFICATION
+                        {
+                            valid = crypto.request_signature_is_valid(&mut m);
+
+                            // blacklist: here the primary receives a request from
+                            //a client, so if the signature is invalid then blacklist this client
+                            if !valid {
+                                let c = m.message::<Request>().c;
+                                {
+                                    let mut blacklist = blist_lock.write().unwrap();
+                                    blacklist.insert(c);
+                                }
+                                println!("Blacklist client {}", c);
+                            }
+                        }
+                    } else {
+                        //let r = m.message::<Request>();
+                        //println!("Client {} is blacklisted", r.c);
                     }
 
                     if valid {
                         //println!("{} sends {:?} to smr", t, m);
                         c2s.send(m).unwrap();
+                    } else {
+                        //println!("{} received invalid request {:?} and dropping", t, m);
                     }
                 }
 
@@ -312,6 +348,7 @@ fn create_crypto_threads(
                     assert!(m.message_type() == MessageType::Request);
                     if !crypto.request_signature_is_valid(&mut m) {
                         m = RawMessage::new(0);
+                        //TODO blacklist: blacklist the current primary and trigger view change
                     }
                     batch_c2s.send(m).unwrap();
                 }
@@ -322,9 +359,30 @@ fn create_crypto_threads(
                 if let Ok(mut m) = speculative_s2c.try_recv() {
                     assert!(m.message_type() == MessageType::Request);
                     let r = m.message::<Request>();
-                    speculative_c2s
-                        .send((r.c, r.seqnum, crypto.request_signature_is_valid(&mut m)))
-                        .unwrap();
+                    let seqnum = r.seqnum;
+                    let sender = r.c;
+
+                    // blacklist: if the client is blacklisted then drop it
+                    let blacklisted = {
+                        let blacklist = blist_lock.read().unwrap();
+                        blacklist.contains(&r.c)
+                    };
+                    let valid = if blacklisted {
+                        //println!("Client {} is blacklisted", r.c);
+                        false
+                    } else {
+                        let valid = crypto.request_signature_is_valid(&mut m);
+                        if !valid {
+                            {
+                                let mut blacklist = blist_lock.write().unwrap();
+                                blacklist.insert(sender);
+                            }
+                            println!("Blacklist client {}", sender);
+                        }
+                        valid
+                    };
+
+                    speculative_c2s.send((sender, seqnum, valid)).unwrap();
                 }
             }
         });
@@ -975,13 +1033,12 @@ impl Replica {
                     let mut can_execute = true;
                     for request in consensus.batch.iter() {
                         let r = request.message::<Request>();
-                        if let Some((s, v)) = self.speculatively_verified.borrow().get(&r.c) {
-                            if *s != r.seqnum || !v {
+                        if let Some((s, _)) = self.speculatively_verified.borrow().get(&r.c) {
+                            if *s != r.seqnum {
                                 /*
                                 println!(
-                                    "Request ({}, {}) not verified yet (seqnum = {}) \
-                                    or invalid signature (verif = {})",
-                                    r.c, r.seqnum, *s, v
+                                    "Request ({}, {}) not verified yet (seqnum = {})",
+                                    r.c, r.seqnum, *s
                                 );
                                 */
                                 can_execute = false;
