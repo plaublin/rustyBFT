@@ -340,7 +340,7 @@ fn create_crypto_threads(
 
                             // blacklist: here the primary receives a request from
                             //a client, so if the signature is invalid then blacklist this client
-                            if !valid {
+                            if !valid && BLACKLIST_NODES {
                                 let c = m.message::<Request>().c;
                                 {
                                     let mut blacklist = blist_lock.write().unwrap();
@@ -393,7 +393,7 @@ fn create_crypto_threads(
                         false
                     } else {
                         let valid = crypto.request_signature_is_valid(&mut m);
-                        if !valid {
+                        if !valid && BLACKLIST_NODES {
                             {
                                 let mut blacklist = blist_lock.write().unwrap();
                                 blacklist.insert(sender);
