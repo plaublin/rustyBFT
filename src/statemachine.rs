@@ -1159,6 +1159,7 @@ impl Replica {
                             let reply = self.execute_single_request(f, request);
                             self.send_message(request.message::<Request>().c, reply);
                         } else {
+                            /*
                             println!(
                                 "Execute request ({}, {}): speculative verification == {},\
                                 entry = {:?}",
@@ -1167,6 +1168,7 @@ impl Replica {
                                 SPECULATIVE_VERIFICATION,
                                 self.speculatively_verified.borrow().get(&r.c)
                             );
+                            */
                         }
                     }
 
