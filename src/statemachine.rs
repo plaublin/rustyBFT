@@ -595,6 +595,13 @@ impl Replica {
         // validated requests. A message is (cid, rid, valid?).
         while !self.speculative_crypto_to_smr_receiver.is_empty() {
             if let Ok((cid, rid, valid)) = self.speculative_crypto_to_smr_receiver.recv() {
+                /*
+                println!(
+                    "Received request ({}, {}, {}) from speculative verification",
+                    cid, rid, valid
+                );
+                */
+
                 self.speculatively_verified
                     .borrow_mut()
                     .insert(cid, (rid, valid));
@@ -638,6 +645,13 @@ impl Replica {
 
         if SPECULATIVE_VERIFICATION {
             // Speculative verification, send request to queue for verification
+            /*
+            println!(
+                "Send request ({}, {}) for speculative verification",
+                r.c, r.seqnum
+            );
+            */
+
             self.speculative_smr_to_crypto_sender
                 .send(request.clone())
                 .unwrap();
@@ -822,6 +836,15 @@ impl Replica {
             //println!("Send request {:?} to crypto threads", batch_request);
             if SPECULATIVE_VERIFICATION {
                 // Speculative verification, send request to queue for verification
+
+                /*
+                let r = batch_request.message::<Request>();
+                println!(
+                    "Send request ({}, {}) for speculative verification",
+                    r.c, r.seqnum
+                );
+                */
+
                 self.speculative_smr_to_crypto_sender
                     .send(batch_request.clone())
                     .unwrap();
@@ -1091,7 +1114,12 @@ impl Replica {
                     for request in consensus.batch.iter() {
                         let r = request.message::<Request>();
                         if let Some((s, _)) = self.speculatively_verified.borrow().get(&r.c) {
-                            if *s != r.seqnum {
+                            // for a given client, either all his requests are valid or all are
+                            // invalid and he is malicious.
+                            // Test is < and not != because we might be slow and try to execute the
+                            // previous request send by the client after we have received the new
+                            // one.
+                            if *s < r.seqnum {
                                 /*
                                 println!(
                                     "Request ({}, {}) not verified yet (seqnum = {})",
@@ -1102,7 +1130,7 @@ impl Replica {
                                 break;
                             }
                         } else {
-                            // println!("Request ({}, {}) not verified yet", r.c, r.seqnum);
+                            //println!("Request ({}, {}) not verified yet", r.c, r.seqnum);
                             can_execute = false;
                             break;
                         }
@@ -1131,7 +1159,6 @@ impl Replica {
                             let reply = self.execute_single_request(f, request);
                             self.send_message(request.message::<Request>().c, reply);
                         } else {
-                            /*
                             println!(
                                 "Execute request ({}, {}): speculative verification == {},\
                                 entry = {:?}",
@@ -1140,7 +1167,6 @@ impl Replica {
                                 SPECULATIVE_VERIFICATION,
                                 self.speculatively_verified.borrow().get(&r.c)
                             );
-                            */
                         }
                     }
 
