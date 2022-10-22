@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const KVS_VALUE_LEN: usize = 1000;
+pub const KVS_VALUE_LEN: usize = 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum KVSRequest {
