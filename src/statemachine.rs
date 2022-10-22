@@ -773,7 +773,7 @@ impl Replica {
             unsafe {
                 let src = req.inner.as_ptr() as *const u8;
                 let dst = payload.as_mut_ptr().add(offset);
-                std::ptr::copy(src, dst, len);
+                std::ptr::copy_nonoverlapping(src, dst, len);
             }
 
             //println!("reqlen = {}, offset now {}, req = {:?}", len, offset, req);
@@ -851,7 +851,7 @@ impl Replica {
             unsafe {
                 let src = payload.as_ptr().add(offset);
                 let dst = batch_request.inner.as_mut_ptr() as *mut u8;
-                std::ptr::copy(src, dst, len);
+                std::ptr::copy_nonoverlapping(src, dst, len);
             }
 
             //println!("Send request {:?} to crypto threads", batch_request);
@@ -894,7 +894,7 @@ impl Replica {
             unsafe {
                 let src = m.message_payload::<PrePrepare>().unwrap().as_ptr();
                 let dst = digest.as_mut_ptr() as *mut u8;
-                std::ptr::copy(src, dst, pp.payload_len());
+                std::ptr::copy_nonoverlapping(src, dst, pp.payload_len());
             }
         } else {
             digest = CryptoLayer::digest_request_batch(m.message_payload::<PrePrepare>().unwrap());
