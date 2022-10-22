@@ -37,11 +37,7 @@ fn main() {
         let my_tx = tx.clone();
         let h = thread::spawn(move || {
             let is_malicious = i < malicious_nc;
-            let smr = if is_malicious {
-                rusty_bft::statemachine::Client::new("nodes_malicious.txt", f, id + i)
-            } else {
-                rusty_bft::statemachine::Client::new(&config, f, id + i)
-            };
+            let smr = rusty_bft::statemachine::Client::new(&config, f, id + i);
 
             println!(
                 "Hello, world! I'm {}client {}: {:?}",
@@ -76,7 +72,7 @@ fn main() {
                     }
                 }
 
-                // std::thread::sleep(time::Duration::from_millis(1000));
+                //std::thread::sleep(time::Duration::from_millis(1000));
             }
 
             let duration = start.elapsed().as_secs_f64();
