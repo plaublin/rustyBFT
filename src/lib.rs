@@ -1,5 +1,6 @@
 pub mod configuration;
 pub mod crypto;
+pub mod kvs;
 pub mod message;
 pub mod network;
 pub mod quorum;

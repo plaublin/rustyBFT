@@ -14,10 +14,15 @@ hex-literal = "0.3.4"
 sha2 = "0.10.2"
 ed25519-dalek = "1.0.1"
 ring = "0.16.20"
-#memcmp = "0.0.6"
 crossbeam-channel = "0.5.5"
 rustudpdk = { path = "/mydata/UDPDK/rustudpdk", optional = true }
 iptables = "*"
+rand = "0.8.5"
+
+# serde is used for the KVS messages
+serde = { version = "1.0", features = ["derive"] }
+rmp-serde = "1.1"
+serde_bytes = "0.11"
 
 [features]
 udpdk = [ "dep:rustudpdk" ]
