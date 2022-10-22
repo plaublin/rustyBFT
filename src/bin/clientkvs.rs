@@ -146,9 +146,9 @@ fn main() {
             global_lat += lat;
         }
 
-        if save_latencies && latencies.len() > 0 {
+        if save_latencies && !latencies.is_empty() {
             for (i, l) in latencies.iter().enumerate() {
-                write!(file, "{} {} {} {}\n", tid, i, l.0, l.1).unwrap();
+                writeln!(file, "{} {} {} {}", tid, i, l.0, l.1).unwrap();
             }
         }
 
