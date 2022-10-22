@@ -32,9 +32,9 @@ fn main() {
     my_kvs.borrow_mut().populate();
 
     smr.run_replica(&|o: Vec<u8>| -> Vec<u8> {
-        println!("Replica {} has received operation {:?} to execute", id, o);
+        //println!("Replica {} has received operation {:?} to execute", id, o);
         let rep = my_kvs.borrow_mut().execute_operation(&o);
-        println!("Replica {} replies with {:?}", id, rep);
+        //println!("Replica {} replies with {:?}", id, rep);
         rep
     });
 }

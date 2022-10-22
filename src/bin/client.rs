@@ -66,7 +66,7 @@ fn main() {
                     //std::thread::sleep(rusty_bft::configuration::CLIENT_TIMEOUT_MS);
                     std::thread::sleep(time::Duration::from_millis(1));
                 } else {
-                    let req = smr.create_request(false, reqlen);
+                    let req = smr.create_authenticated_request(false, reqlen);
 
                     let lat_start = time::Instant::now();
                     let _ = smr.invoke(&req);

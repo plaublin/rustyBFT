@@ -15,7 +15,7 @@ fn print_usage(cmd: &str) {
 fn main() {
     // read command line
     let args: Vec<String> = env::args().collect();
-    if args.len() < 10 {
+    if args.len() < 9 {
         print_usage(&args[0]);
         return;
     }
@@ -65,13 +65,14 @@ fn main() {
                     value: if get {
                         None
                     } else {
-                        Some([0; rusty_bft::kvs::KVS_VALUE_LEN].to_vec())
+                        Some([smr.id as u8; rusty_bft::kvs::KVS_VALUE_LEN].to_vec())
                     },
                 };
 
-                println!("Client {} operation is {:?}", smr.id, c);
+                //println!("Client {} operation is {:?}", smr.id, c);
                 if get {
                     n_get += 1;
+                    /*
                     println!(
                         "Client {} send get request: {} / {}, ratio {}",
                         smr.id,
@@ -79,27 +80,31 @@ fn main() {
                         accepted,
                         (n_get as f32) / (accepted as f32)
                     );
+                    */
                 } else {
-                    println!(
-                        "Client {} send rw request: {} / {}",
-                        smr.id, n_get, accepted
-                    );
+                    /*
+                        println!(
+                            "Client {} send rw request: {} / {}",
+                            smr.id, n_get, accepted
+                        );
+                    */
                 }
 
                 let o = rusty_bft::kvs::create_request(c);
-                let mut req = smr.create_request(get, o.len());
+                let mut req = smr.create_unauthenticated_request(get, o.len());
                 let _ = req
                     .message_payload_mut::<rusty_bft::message::Request>()
                     .unwrap()
                     .write(&o);
+                smr.authenticate_request(&mut req);
 
                 let lat_start = time::Instant::now();
                 let rep = smr.invoke(&req);
                 let lat = lat_start.elapsed().as_micros();
 
                 let payload = rep.message_payload::<rusty_bft::message::Reply>().unwrap();
-                let o = rusty_bft::kvs::parse_request(payload);
-                println!("Client {} received reply from KVS: {:?}", smr.id, o);
+                let _o = rusty_bft::kvs::parse_request(payload);
+                //println!("Client {} received reply from KVS: {:?}", smr.id, _o);
 
                 accepted += 1;
                 sum_lat += lat;
@@ -111,7 +116,7 @@ fn main() {
                     println!("Client {} accepted {}", smr.id, accepted);
                 }
 
-                std::thread::sleep(time::Duration::from_millis(1000));
+                //std::thread::sleep(time::Duration::from_millis(1000));
             }
 
             let duration = start.elapsed().as_secs_f64();

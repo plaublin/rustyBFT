@@ -66,11 +66,20 @@ impl Client {
         &self.nodes[self.id as usize]
     }
 
-    pub fn create_request(&self, ro: bool, reqlen: usize) -> RawMessage {
+    pub fn create_authenticated_request(&self, ro: bool, reqlen: usize) -> RawMessage {
         let mut request = RawMessage::new_request(self.id, ro, self.seqnum.get(), reqlen);
         self.crypto.sign_request(&mut request);
         self.crypto.authenticate_message(self.primary, &mut request);
         request
+    }
+
+    pub fn create_unauthenticated_request(&self, ro: bool, reqlen: usize) -> RawMessage {
+        RawMessage::new_request(self.id, ro, self.seqnum.get(), reqlen)
+    }
+
+    pub fn authenticate_request(&self, request: &mut RawMessage) {
+        self.crypto.sign_request(request);
+        self.crypto.authenticate_message(self.primary, request);
     }
 
     // Create a request that is not signed correctly
@@ -832,7 +841,8 @@ impl Replica {
         while offset < payload.len() {
             //println!("offset = {}, payload.len() = {}", offset, payload.len());
             let len = unsafe {
-                let header = &*(payload.as_ptr() as *const MessageHeader) as &MessageHeader;
+                let header =
+                    &*(payload.as_ptr().add(offset) as *const MessageHeader) as &MessageHeader;
                 std::mem::size_of::<MessageHeader>() + header.len
             };
 

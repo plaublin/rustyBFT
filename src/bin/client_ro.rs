@@ -54,7 +54,7 @@ fn main() {
                 let ro = (n_ro as f32) < n_ro_should_sent;
 
                 // create request
-                let req = smr.create_request(ro, reqlen);
+                let req = smr.create_authenticated_request(ro, reqlen);
 
                 if ro {
                     n_ro += 1;
