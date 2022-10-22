@@ -17,6 +17,7 @@ ring = "0.16.20"
 #memcmp = "0.0.6"
 crossbeam-channel = "0.5.5"
 rustudpdk = { path = "/mydata/UDPDK/rustudpdk", optional = true }
+iptables = "*"
 
 [features]
 udpdk = [ "dep:rustudpdk" ]

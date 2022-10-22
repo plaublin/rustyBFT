@@ -11,5 +11,5 @@ ID=$3
 REPLEN=$4
 CRYPTO_THREADS=$5
 
-echo cargo run --release --bin replica $NODES $F $ID $REPLEN $CRYPTO_THREADS
-cargo run --release --bin replica $NODES $F $ID $REPLEN $CRYPTO_THREADS
+cargo build --release --bin replica
+sudo target/release/replica $NODES $F $ID $REPLEN $CRYPTO_THREADS

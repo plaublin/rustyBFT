@@ -19,6 +19,7 @@ use std::io::Write;
 #[cfg(feature = "udpdk")]
 use std::process;
 use std::rc::Rc;
+use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::{thread, time};
 
@@ -207,7 +208,6 @@ pub struct Replica {
     pending_req: RefCell<VecDeque<RawMessage>>,   // for batching
     // We assume there is at most 1 pending request per client
     speculatively_verified: RefCell<HashMap<u32, (u64, bool)>>, // speculative verification result.
-    blacklist_lock: Arc<RwLock<HashSet<u32>>>,
     stats: Cell<Statistics>,
 }
 
@@ -287,7 +287,6 @@ fn create_crypto_threads(
     id: u32,
     nodes: Vec<Node>,
     nthreads: usize,
-    blacklist_lock: &Arc<RwLock<HashSet<u32>>>,
     (smr_to_crypto, crypto_to_smr): (Receiver<(u32, RawMessage)>, Sender<RawMessage>),
     (crypto_to_net, net_to_crypto): (Sender<(u32, RawMessage)>, Receiver<RawMessage>),
     (batch_smr_to_crypto, batch_crypto_to_smr): (Receiver<RawMessage>, Sender<RawMessage>),
@@ -296,13 +295,17 @@ fn create_crypto_threads(
         Sender<(u32, u64, bool)>,
     ),
 ) {
+    let blacklist_lock = Arc::new(RwLock::new(HashSet::new()));
+    let iptables_lock = Arc::new(Mutex::new(iptables::new(false).unwrap()));
+
     for t in 0..nthreads {
         let n = nodes.clone();
         let s2c = smr_to_crypto.clone();
         let c2s = crypto_to_smr.clone();
         let c2n = crypto_to_net.clone();
         let n2c = net_to_crypto.clone();
-        let blist_lock = Arc::clone(blacklist_lock);
+        let blist_lock = Arc::clone(&blacklist_lock);
+        let ipt_lock = Arc::clone(&iptables_lock);
 
         // use to verify the batch of requests in the PP in parallel
         let batch_s2c = batch_smr_to_crypto.clone();
@@ -352,11 +355,21 @@ fn create_crypto_threads(
                             //a client, so if the signature is invalid then blacklist this client
                             if !valid && BLACKLIST_NODES {
                                 let c = m.message::<Request>().c;
+                                let port = n[c as usize].client_port;
                                 {
                                     let mut blacklist = blist_lock.write().unwrap();
                                     blacklist.insert(c);
                                 }
-                                println!("Blacklist client {}", c);
+                                {
+                                    let ipt = ipt_lock.lock().unwrap();
+                                    ipt.append(
+                                        "filter",
+                                        "INPUT",
+                                        format!("-p udp --sport {} -j DROP", port).as_str(),
+                                    )
+                                    .unwrap();
+                                }
+                                println!("Blacklist client {} on port {}", c, port);
                             }
                         }
                     } else {
@@ -408,7 +421,17 @@ fn create_crypto_threads(
                                 let mut blacklist = blist_lock.write().unwrap();
                                 blacklist.insert(sender);
                             }
-                            println!("Blacklist client {}", sender);
+                            let port = n[sender as usize].client_port;
+                            {
+                                let ipt = ipt_lock.lock().unwrap();
+                                ipt.append(
+                                    "filter",
+                                    "INPUT",
+                                    format!("-p udp --sport {} -j DROP", port).as_str(),
+                                )
+                                .unwrap();
+                            }
+                            println!("Blacklist client {} on port {}", sender, port);
                         }
                         valid
                     };
@@ -427,8 +450,6 @@ impl Replica {
         assert!(crypto_threads > 0, "Need at least 1 crypto thread");
 
         let nodes = parse_configuration_file(config);
-
-        let blacklist_lock = Arc::new(RwLock::new(HashSet::new()));
 
         let (smr_to_crypto_sender, smr_to_crypto_receiver) = crossbeam_channel::unbounded();
         let (crypto_to_smr_sender, crypto_to_smr_receiver) = crossbeam_channel::unbounded();
@@ -457,7 +478,6 @@ impl Replica {
             id,
             nodes.clone(),
             crypto_threads,
-            &blacklist_lock,
             (smr_to_crypto_receiver, crypto_to_smr_sender),
             (crypto_to_net_sender, net_to_crypto_receiver),
             (batch_smr_to_crypto_receiver, batch_crypto_to_smr_sender),
@@ -492,7 +512,6 @@ impl Replica {
             consensus: RefCell::new(BTreeMap::new()),
             pending_req: RefCell::new(VecDeque::new()),
             speculatively_verified: RefCell::new(HashMap::new()),
-            blacklist_lock,
             stats: Cell::new(stats),
         }
     }
@@ -614,14 +633,6 @@ impl Replica {
 
         let r = request.message::<Request>();
         dbg_println!("Replica {} has received request {:?}", self.id, r);
-
-        // blacklist: if this client is blacklisted then drop the message early
-        {
-            let blacklist = self.blacklist_lock.read().unwrap();
-            if blacklist.contains(&r.c) {
-                return;
-            }
-        }
 
         // read-only requests: verify + reply to client immediately
         // no need for speculative execution as there is no consensus
