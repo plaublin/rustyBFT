@@ -36,9 +36,13 @@ fn main() {
         let config = args[1].clone();
         let my_tx = tx.clone();
         let h = thread::spawn(move || {
-            let smr = rusty_bft::statemachine::Client::new(&config, f, id + i);
-
             let is_malicious = i < malicious_nc;
+            let smr = if is_malicious {
+                rusty_bft::statemachine::Client::new("nodes_malicious.txt", f, id + i)
+            } else {
+                rusty_bft::statemachine::Client::new(&config, f, id + i)
+            };
+
             println!(
                 "Hello, world! I'm {}client {}: {:?}",
                 if is_malicious { "malicious " } else { "" },
