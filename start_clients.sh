@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ $# -ne 7 ]; then
-   echo "Args: <config_file> <f> <id> <#clients> <duration_sec> <reqlen> <malicious_ratio>"
+if [ $# -ne 8 ]; then
+   echo "Args: <config_file> <f> <id> <#clients> <duration_sec> <reqlen> <malicious_ratio> <save_latencies>"
 	exit 0
 fi
 
@@ -12,6 +12,6 @@ CLIENTS=$4
 DURATION=$5
 REQLEN=$6
 MALICIOUS=$7
+SAVE_LATENCIES=$8
 
-echo cargo run --release --bin client $NODES $F $ID $CLIENTS $DURATION $REQLEN $MALICIOUS
-cargo run --release --bin client $NODES $F $ID $CLIENTS $DURATION $REQLEN $MALICIOUS
+cargo run --release --bin client $NODES $F $ID $CLIENTS $DURATION $REQLEN $MALICIOUS $SAVE_LATENCIES

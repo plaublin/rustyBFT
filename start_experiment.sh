@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ $# -ne 6 ]; then
-   echo "Args: <config_file> <f> <#clients> <reqlen> <crypto_threads> <malicious_ratio>"
+if [ $# -ne 7 ]; then
+   echo "Args: <config_file> <f> <#clients> <reqlen> <crypto_threads> <malicious_ratio> <save_latencies>"
 	exit 0
 fi
 
@@ -12,6 +12,7 @@ CLIENTS=$3
 REQLEN=$4
 CRYPTO_THREADS=$5
 MALICIOUS=$6
+SAVE_LATENCIES=$7
 DURATION=30
 REPLEN=0
 REPLICAS=(node0 node1 node2 node3 node4 node5 node6)
@@ -46,8 +47,8 @@ done
 
 # start clients
 echo "Starting clients"
-./start_clients.sh $NODES $F $FIRST_CLIENT $CLIENTS $DURATION $REQLEN $MALICIOUS | tee clients.log &
-sleep $(($DURATION + 5))
+./start_clients.sh $NODES $F $FIRST_CLIENT $CLIENTS $DURATION $REQLEN $MALICIOUS $SAVE_LATENCIES | tee clients.log &
+sleep $(($DURATION + 10))
 
 # stop all
 stop_all
@@ -57,3 +58,6 @@ echo "Collect results"
 mkdir $RESDIR
 scp node0:$EXPDIR/replica0.log $RESDIR/
 mv clients.log $RESDIR/
+if [ $SAVE_LATENCIES -eq 1 ]; then
+	mv latencies.log $RESDIR/
+fi
