@@ -175,7 +175,7 @@ struct Consensus {
 impl Consensus {
     fn prepare_quorum_size(f: u32) -> usize {
         if HYBRID_MODE {
-            f as usize
+            0_usize
         } else {
             (2 * f) as usize
         }
@@ -900,28 +900,11 @@ impl Replica {
             digest = CryptoLayer::digest_request_batch(m.message_payload::<PrePrepare>().unwrap());
         }
 
-        // create <P, v, n, r, req_digest>_mac and send it to all replicas
-        let p = RawMessage::new_prepare(
-            self.v,
-            pp_seq_num,
-            self.id,
-            digest[..CryptoLayer::digest_length()]
-                .try_into()
-                .expect("wrong size"),
-        );
-        self.send_message_to_all_replicas(&p);
-
         // create consensus and update hashmap
-        // maybe we already received a P and already have a consensus
         {
             let mut borrowed_consensus = self.consensus.borrow_mut();
             let consensus = borrowed_consensus.entry(pp_seq_num).or_insert_with(|| {
-                /*
-                println!(
-                    "Create a new consensus for {}; adding the P {:?}",
-                    pp_seq_num, p
-                );
-                */
+                //println!("Create a new consensus for {}", pp_seq_num);
 
                 Consensus {
                     batch: vec![],
@@ -935,8 +918,25 @@ impl Replica {
             consensus.pp = Some(m);
         }
 
-        // need to be here so we don't call it while the consensus is borrowed as mutable
-        self.handle_prepare(p);
+        // In hybrid mode, the replica sends a commit, bypassing the prepare phase
+        if HYBRID_MODE {
+            // create <C, v, n, r>_mac and send it to all replicas
+            let c = RawMessage::new_commit(self.v, pp_seq_num, self.id);
+            self.send_message_to_all_replicas(&c);
+            self.handle_commit(c);
+        } else {
+            // create <P, v, n, r, req_digest>_mac and send it to all replicas
+            let p = RawMessage::new_prepare(
+                self.v,
+                pp_seq_num,
+                self.id,
+                digest[..CryptoLayer::digest_length()]
+                    .try_into()
+                    .expect("wrong size"),
+            );
+            self.send_message_to_all_replicas(&p);
+            self.handle_prepare(p);
+        }
     }
 
     fn handle_prepare(&self, m: RawMessage) {
@@ -1045,7 +1045,12 @@ impl Replica {
         // there might not be a consensus yet because we didn't receive the PP yet, but we
         // still need to keep the commit
         if !self.is_primary() && self.consensus.borrow_mut().get_mut(&c.seqnum).is_none() {
-            // println!("Replica {} cannot find consensus for P {}", self.id, p.n);
+            /*
+            println!(
+                "Replica {} cannot find consensus for C {}",
+                self.id, c.seqnum
+            );
+            */
             // add the consensus
             let consensus = Consensus {
                 batch: vec![],
@@ -1084,10 +1089,12 @@ impl Replica {
         f: &dyn Fn(Vec<u8>) -> Vec<u8>,
         request: &RawMessage,
     ) -> RawMessage {
-        //println!(
-        //    "Single-mode: Replica {} has received request {:?}",
-        //    self.id, request
-        //);
+        /*
+        println!(
+            "Single-request: Replica {} has received request {:?}",
+            self.id, request
+        );
+        */
 
         let payload = f(request
             .message_payload::<Request>()
@@ -1197,6 +1204,11 @@ impl Replica {
                     //consensus.rep = Some(rep);
                     self.seqnum.set(consensus_num + 1);
                 }
+            } else {
+                /*
+                println!("Something is missing in this consensus: seqnum: {} ?? {}; rep is none? {}, batch not empty? {}, pp is some{}, p is complete? {}, c is complete? {}",
+                    *consensus_num, self.seqnum.get(), consensus.rep.is_none(), !consensus.batch.is_empty(), consensus.pp.is_some(), consensus.p.is_complete(), consensus.c.is_complete());
+                */
             }
         }
 
