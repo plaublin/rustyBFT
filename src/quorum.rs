@@ -29,7 +29,7 @@ where
     }
 
     pub fn is_complete(&self) -> bool {
-        self.v.is_some()
+        self.complete == 0 || self.v.is_some()
     }
 
     pub fn value(&self) -> Rc<T> {
