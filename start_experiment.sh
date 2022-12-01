@@ -60,4 +60,6 @@ scp node0:$EXPDIR/replica0.log $RESDIR/
 mv clients.log $RESDIR/
 if [ $SAVE_LATENCIES -eq 1 ]; then
 	mv latencies.log $RESDIR/
+else
+	rm latencies.log
 fi
